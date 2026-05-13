@@ -4153,6 +4153,7 @@ function drawHUD(ctx) {
 
 function drawBuildButtons(ctx) {
   const ICONS = { light: "🏭", heavy: "🏭", swarmer: "🏭", sniper: "🏭", air: "✈️", turret: "🗼" };
+  let hoveredBtn = null;
   for (const btn of game.ui.buttons) {
     const isTurret = btn.type === "turret";
     const cost = isTurret ? TURRET_TYPE.cost : FACTORY_TYPES[btn.type].cost;
@@ -4162,6 +4163,7 @@ function drawBuildButtons(ctx) {
     const isActive = game.ui.selectedBuildType === btn.type;
     const canAfford = game[mySide()].money >= cost;
     const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, btn);
+    if (isHover) hoveredBtn = btn;
 
     let fill;
     if (!canAfford) fill = COLORS.btnDisabled;
@@ -4187,6 +4189,119 @@ function drawBuildButtons(ctx) {
     ctx.font = "bold 12px -apple-system, sans-serif";
     ctx.fillText(`${cost}💰`, btn.x + btn.w / 2 + 34, btn.y + btn.h / 2);
   }
+
+  // Tooltip de caractéristiques au survol — affiché après les boutons
+  // pour passer par-dessus la rangée et toujours rester lisible.
+  if (hoveredBtn) drawBuildButtonTooltip(ctx, hoveredBtn);
+}
+
+// Construit la liste des lignes (label + valeur) à afficher pour un type de bâtiment donné.
+function buildTooltipRows(type) {
+  const rows = [];
+  if (type === "turret") {
+    const t = TURRET_TYPE;
+    rows.push({ label: "Type", value: "Tourelle (rempart)" });
+    rows.push({ label: "PV", value: String(t.hp) });
+    rows.push({ label: "Dégâts", value: String(t.damage) });
+    rows.push({ label: "Portée", value: `${t.range} px` });
+    rows.push({ label: "Cadence", value: `1 tir / ${t.attackInterval}s` });
+    rows.push({ label: "Cible", value: "Sol uniquement" });
+    return rows;
+  }
+  const factory = FACTORY_TYPES[type];
+  const unit = UNIT_TYPES[factory?.unitType];
+  if (!factory || !unit) return rows;
+  rows.push({ label: "Usine PV", value: String(factory.hp) });
+  rows.push({ label: "Cadence prod", value: `1 unité / ${factory.prodInterval}s` });
+  rows.push({ label: "Unité PV", value: String(unit.hp) });
+  rows.push({ label: "Dégâts", value: String(unit.damage) });
+  rows.push({ label: "Portée", value: `${unit.range} px` });
+  rows.push({ label: "Cadence tir", value: `1 tir / ${unit.attackInterval}s` });
+  rows.push({ label: "Vitesse", value: `${unit.speed} px/s` });
+  rows.push({ label: "Couche", value: unit.layer === "air" ? "Aérienne ✈️" : "Sol 🚜" });
+  let targets = unit.layer === "air" ? "Sol + Air" : (unit.canTargetAir ? "Sol + Air" : "Sol uniquement");
+  rows.push({ label: "Cibles", value: targets });
+  rows.push({ label: "Récompense", value: `+${unit.killReward} 💰 par kill` });
+  return rows;
+}
+
+function drawBuildButtonTooltip(ctx, btn) {
+  const rows = buildTooltipRows(btn.type);
+  if (rows.length === 0) return;
+
+  const factory = FACTORY_TYPES[btn.type];
+  const title = btn.type === "turret" ? "Tourelle" : (factory ? factory.label : btn.type);
+
+  // Dimensions
+  const padX = 12, padY = 10, lineH = 16, headerH = 20;
+  ctx.save();
+  ctx.font = "bold 13px -apple-system, sans-serif";
+  let maxW = ctx.measureText(title).width;
+  ctx.font = "12px -apple-system, sans-serif";
+  for (const r of rows) {
+    const lineW = ctx.measureText(`${r.label} : ${r.value}`).width;
+    if (lineW > maxW) maxW = lineW;
+  }
+  ctx.restore();
+
+  const boxW = Math.ceil(maxW) + padX * 2;
+  const boxH = headerH + rows.length * lineH + padY * 2;
+
+  // Position : sous le bouton, calée sur son centre, clampée dans le canvas
+  let x = Math.round(btn.x + btn.w / 2 - boxW / 2);
+  let y = Math.round(btn.y + btn.h + 8);
+  if (x < 6) x = 6;
+  if (x + boxW > CONFIG.CANVAS_W - 6) x = CONFIG.CANVAS_W - 6 - boxW;
+  if (y + boxH > CONFIG.H - 6) y = btn.y - boxH - 8; // bascule au-dessus si manque de place
+
+  ctx.save();
+  // Petit triangle pointant vers le bouton (uniquement si tooltip en dessous)
+  if (y > btn.y + btn.h) {
+    ctx.fillStyle = "rgba(15, 23, 42, 0.96)";
+    const tipX = Math.max(x + 18, Math.min(x + boxW - 18, btn.x + btn.w / 2));
+    ctx.beginPath();
+    ctx.moveTo(tipX - 8, y);
+    ctx.lineTo(tipX + 8, y);
+    ctx.lineTo(tipX, y - 7);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Boîte
+  ctx.fillStyle = "rgba(15, 23, 42, 0.96)";
+  roundedRect(ctx, x, y, boxW, boxH, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(59, 130, 246, 0.55)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Titre
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(title, x + padX, y + padY + 12);
+
+  // Séparateur sous le titre
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.beginPath();
+  ctx.moveTo(x + padX, y + padY + headerH);
+  ctx.lineTo(x + boxW - padX, y + padY + headerH);
+  ctx.stroke();
+
+  // Lignes label : valeur
+  ctx.font = "12px -apple-system, sans-serif";
+  let cy = y + padY + headerH + 2;
+  for (const r of rows) {
+    cy += lineH;
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.textAlign = "left";
+    ctx.fillText(r.label, x + padX, cy);
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "right";
+    ctx.fillText(r.value, x + boxW - padX, cy);
+  }
+  ctx.restore();
 }
 
 function drawSettingsButton(ctx) {
