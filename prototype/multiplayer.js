@@ -16,7 +16,7 @@
 //   on{Input,Snapshot,GameOver,OpponentLeave,LobbyUpdate,Start}(cb) -> unsubscribe
 //   state                                   -> lecture seule
 
-import { supabase, getProfile } from "/lib/supabase.js";
+import { supabase, getProfile, getCurrentSkin } from "/lib/supabase.js";
 
 const listeners = {
   input: new Set(),
@@ -27,6 +27,7 @@ const listeners = {
   start: new Set(),            // les 2 joueurs prêts → partie démarre
   chat: new Set(),             // message texte reçu via broadcast
   emote: new Set(),            // emote rapide reçue via broadcast
+  peerInfo: new Set(),         // identité du peer (username + skin) reçue à la connexion
 };
 
 const state = {
@@ -57,6 +58,7 @@ async function init() {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return null;
   state.me = await getProfile();
+  try { state.mySkin = await getCurrentSkin(); } catch { state.mySkin = null; }
   return state.me;
 }
 
@@ -239,9 +241,21 @@ async function setupChannel() {
   ch.on("broadcast", { event: "chat" },     ({ payload }) => notify("chat", payload));
   ch.on("broadcast", { event: "emote" },    ({ payload }) => notify("emote", payload));
   ch.on("broadcast", { event: "hello" },    ({ payload }) => {
-    // ping de présence : utile pour que le host sache que le guest est connecté
+    // ping de présence : à la réception, on notifie game.js qui pourra appliquer
+    // le skin du peer à son côté. Le host répond toujours au hello du guest pour
+    // que le guest ait aussi le skin du host.
+    if (payload?.from && payload.from !== state.role) {
+      notify("peerInfo", { username: payload.username, skin: payload.skin || null, from: payload.from });
+    }
     if (state.role === "host" && payload?.from === "guest") {
-      ch.send({ type: "broadcast", event: "hello", payload: { from: "host", username: state.me?.username || null } });
+      ch.send({
+        type: "broadcast", event: "hello",
+        payload: {
+          from: "host",
+          username: state.me?.username || null,
+          skin: state.mySkin ? { hex_color: state.mySkin.hex_color, hex_color_dark: state.mySkin.hex_color_dark } : null,
+        },
+      });
     }
   });
   ch.on("presence", { event: "leave" }, ({ key }) => {
@@ -254,8 +268,18 @@ async function setupChannel() {
     ch.subscribe(async (status) => {
       if (status === "SUBSCRIBED") {
         try { await ch.track({ user_id: state.me?.id, username: state.me?.username, role: state.role }); } catch {}
+        const skinPayload = state.mySkin ? { hex_color: state.mySkin.hex_color, hex_color_dark: state.mySkin.hex_color_dark } : null;
         if (state.role === "guest") {
-          ch.send({ type: "broadcast", event: "hello", payload: { from: "guest", username: state.me?.username || null } });
+          ch.send({
+            type: "broadcast", event: "hello",
+            payload: { from: "guest", username: state.me?.username || null, skin: skinPayload },
+          });
+        }
+        if (state.role === "spectator") {
+          ch.send({
+            type: "broadcast", event: "hello",
+            payload: { from: "spectator", username: state.me?.username || null, skin: skinPayload },
+          });
         }
         resolve();
       }
@@ -469,6 +493,7 @@ const RE_MP = {
   onStart:         (cb) => on("start", cb),
   onChat:          (cb) => on("chat", cb),
   onEmote:         (cb) => on("emote", cb),
+  onPeerInfo:      (cb) => on("peerInfo", cb),
 };
 
 window.RE_MP = RE_MP;

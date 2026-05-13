@@ -97,8 +97,8 @@ const FACTORY_TYPES = {
   air: {
     id: "air",
     label: "Aérienne",
-    cost: 180,
-    prodInterval: 3.2,
+    cost: 220,            // ↑ de 180 — l'air est polyvalent (sol + air), il doit coûter
+    prodInterval: 4.0,    // ↑ de 3.2 — cadence ralentie
     hp: 130,
     unitType: "air",
   },
@@ -131,8 +131,8 @@ const UNIT_TYPES = {
   },
   air: {
     id: "air",
-    hp: 45, damage: 14, speed: 110, radius: 9,
-    range: 75, attackInterval: 1.0, killReward: 30,
+    hp: 35, damage: 10, speed: 110, radius: 9,   // PV 45→35, dmg 14→10 (vulnérable face aux turrets/sniper)
+    range: 75, attackInterval: 1.1, killReward: 30,
     layer: "air",
     canTargetAir: true, // les drones peuvent tirer sur tout : sol + air
   },
@@ -632,6 +632,13 @@ const LIGHTNING_COOLDOWN_SEC = 30;
 const LIGHTNING_KILL_HALF_WIDTH = 70; // moitié largeur de la zone létale (px)
 const LIGHTNING_TTL_SEC = 0.55;
 
+// IEM (impulsion électro-magnétique) : sort coûteux qui annihile toutes les
+// unités mobiles des deux côtés. Conçu pour clore une vague hors de contrôle
+// ou faire reset l'économie de l'adversaire. Plus cher et plus long que l'éclair.
+const IEM_COOLDOWN_SEC = 60;
+const IEM_COST = 400;
+const IEM_TTL_SEC = 1.2;
+
 function makeSideState(side) {
   const preset = game.preset;
   // En multijoueur, les deux joueurs partent avec le même argent et le même
@@ -1048,6 +1055,11 @@ function tryPlaceTurret(side, wallSlotIndex) {
     range: TURRET_TYPE.range,
     attackInterval: TURRET_TYPE.attackInterval,
     killReward: TURRET_TYPE.killReward,
+    // Les tourelles défendent contre TOUTES les couches (sol + air) :
+    // c'est le contre principal aux drones, qu'on ne peut pas atteindre avec
+    // les unités ground classiques (sauf sniper).
+    layer: "ground",
+    canTargetAir: true,
   };
   const turret = {
     side,
@@ -1650,16 +1662,51 @@ async function sendGameResultToBackend(result) {
 }
 
 // Applique le skin équipé aux couleurs du joueur (et la souffle au prochain frame)
+const DEFAULT_ENEMY_COLOR = "#ef4444";
+const DEFAULT_ENEMY_DARK = "#991b1b";
+
+// Applique la couleur d'équipe (skin) du joueur courant à SON côté.
+// Solo / host / spectateur : mySide() = "player" → on touche COLORS.player/playerDark.
+// Guest MP : mySide() = "enemy" → on touche COLORS.enemy/enemyDark.
+// L'autre côté garde sa couleur par défaut tant que applyPeerSkin n'a pas été
+// appelée (avec le skin du peer reçu via le hello broadcast).
 function applyTeamSkin() {
   const skin = window.RE_AUTH?.skin;
-  if (skin && skin.hex_color && skin.hex_color_dark) {
+  const me = mySide();
+  if (me === "player") {
+    if (skin && skin.hex_color && skin.hex_color_dark) {
+      COLORS.player = skin.hex_color;
+      COLORS.playerDark = skin.hex_color_dark;
+      COLORS.playerSoft = hexToRgba(skin.hex_color, 0.15);
+    } else {
+      COLORS.player = DEFAULT_PLAYER_COLOR;
+      COLORS.playerDark = DEFAULT_PLAYER_DARK;
+      COLORS.playerSoft = "rgba(59, 130, 246, 0.15)";
+    }
+  } else {
+    if (skin && skin.hex_color && skin.hex_color_dark) {
+      COLORS.enemy = skin.hex_color;
+      COLORS.enemyDark = skin.hex_color_dark;
+    } else {
+      COLORS.enemy = DEFAULT_ENEMY_COLOR;
+      COLORS.enemyDark = DEFAULT_ENEMY_DARK;
+    }
+  }
+}
+
+// Applique le skin reçu du peer à oppSide() pour que les troupes adverses
+// arborent SA couleur, pas la couleur par défaut. Appelée par le handler
+// onPeerInfo de multiplayer.js.
+function applyPeerSkin(skin) {
+  if (!skin || !skin.hex_color || !skin.hex_color_dark) return;
+  const opp = oppSide();
+  if (opp === "player") {
     COLORS.player = skin.hex_color;
     COLORS.playerDark = skin.hex_color_dark;
     COLORS.playerSoft = hexToRgba(skin.hex_color, 0.15);
   } else {
-    COLORS.player = DEFAULT_PLAYER_COLOR;
-    COLORS.playerDark = DEFAULT_PLAYER_DARK;
-    COLORS.playerSoft = "rgba(59, 130, 246, 0.15)";
+    COLORS.enemy = skin.hex_color;
+    COLORS.enemyDark = skin.hex_color_dark;
   }
 }
 
@@ -1777,9 +1824,46 @@ function updateLightning(dt) {
   if (game.mode === "mp" && game.mp && game.mp.enemyLightningCooldown > 0) {
     game.mp.enemyLightningCooldown = Math.max(0, game.mp.enemyLightningCooldown - dt);
   }
+  // IEM cooldowns
+  if (game.iemCooldown > 0) game.iemCooldown = Math.max(0, game.iemCooldown - dt);
+  if (game.mode === "mp" && game.mp && game.mp.enemyIemCooldown > 0) {
+    game.mp.enemyIemCooldown = Math.max(0, game.mp.enemyIemCooldown - dt);
+  }
+  // Tick l'animation IEM en cours
+  if (game.iem) {
+    game.iem.age += dt;
+    if (game.iem.age >= game.iem.ttl) game.iem = null;
+  }
   if (!game.lightning) return;
   game.lightning.age += dt;
   if (game.lightning.age >= game.lightning.ttl) game.lightning = null;
+}
+
+// Déclenche une IEM : tue toutes les unités mobiles des deux côtés, déduit
+// le coût au lanceur, démarre son cooldown, et arme l'effet visuel.
+function fireIem(side) {
+  if (iemCdFor(side) > 0) return false;
+  const state = game[side];
+  if (!state || state.money < IEM_COST) return false;
+  state.money -= IEM_COST;
+  game.stats[side].moneySpent += IEM_COST;
+  setIemCdFor(side, IEM_COOLDOWN_SEC);
+  game.iem = { side, age: 0, ttl: IEM_TTL_SEC };
+
+  let killsByPlayer = 0, killsByEnemy = 0;
+  for (const u of game.units) {
+    if (u.hp <= 0) continue;
+    if (u.stationary) continue;
+    u.hp = 0;
+    spawnExplosion(u.x, u.y, u.side);
+    game.stats[u.side].unitsLost++;
+    if (u.side === "player") killsByEnemy++;
+    else killsByPlayer++;
+  }
+  game.stats.player.unitsKilled += killsByPlayer;
+  game.stats.enemy.unitsKilled += killsByEnemy;
+  audio.playSFX("lightning");
+  return true;
 }
 
 // Retourne le cooldown de foudre courant pour un côté donné.
@@ -1793,6 +1877,16 @@ function lightningCdFor(side) {
 function setLightningCdFor(side, value) {
   if (side === "player") game.lightningCooldown = value;
   else if (game.mode === "mp" && game.mp) game.mp.enemyLightningCooldown = value;
+}
+
+function iemCdFor(side) {
+  if (side === "player") return game.iemCooldown || 0;
+  if (game.mode === "mp" && game.mp) return game.mp.enemyIemCooldown || 0;
+  return 0;
+}
+function setIemCdFor(side, value) {
+  if (side === "player") game.iemCooldown = value;
+  else if (game.mode === "mp" && game.mp) game.mp.enemyIemCooldown = value;
 }
 
 // Toggle du mode de visée (clic bouton Éclair / touche L)
@@ -1916,6 +2010,7 @@ function render(ctx) {
   drawScrollHints(ctx);
   drawUpgradePanel(ctx);
   drawSettingsPanel(ctx);
+  drawIemFx(ctx);
   if (game.mode === "mp") drawInGameChat(ctx);
   if (game.mode === "mp") drawEmoteOverlay(ctx);
   if (game.mode === "mp" && game.ui.emoteMenuOpen) drawEmoteRadial(ctx);
@@ -4196,6 +4291,7 @@ function drawHUD(ctx) {
   // Boutons "Construire" (mode build) + bouton spécial éclair
   drawBuildButtons(ctx);
   drawLightningButton(ctx);
+  drawIemButton(ctx);
   drawSettingsButton(ctx);
   drawSurrenderButton(ctx);
 
@@ -4293,7 +4389,7 @@ function buildTooltipRows(type) {
     rows.push({ label: "Dégâts", value: String(t.damage) });
     rows.push({ label: "Portée", value: `${t.range} px` });
     rows.push({ label: "Cadence", value: `1 tir / ${t.attackInterval}s` });
-    rows.push({ label: "Cible", value: "Sol uniquement" });
+    rows.push({ label: "Cible", value: "Sol + Air ✈️" });
     return rows;
   }
   const factory = FACTORY_TYPES[type];
@@ -4654,6 +4750,102 @@ function drawAudioSlider(ctx, x, y, width, value, enabled) {
     ctx.fillRect(tx - 0.5, trackY - 2, 1, trackH + 4);
   }
   return { x, y: trackY - 6, w: width, h: trackH + 12 };
+}
+
+// Bouton IEM — placé à droite de l'éclair. Couleur cyan (impulsion EM).
+function drawIemButton(ctx) {
+  const btnW = 110;
+  const btnH = 36;
+  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 8; // après le bouton Éclair (110 + 8 de marge)
+  const btnY = 12;
+  game.ui.iemBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
+
+  const cd = iemCdFor(mySide());
+  const ready = cd <= 0;
+  const canAfford = game[mySide()].money >= IEM_COST;
+  const enabled = ready && canAfford;
+  const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.iemBtn);
+
+  ctx.save();
+  if (enabled) {
+    ctx.fillStyle = isHover ? "rgba(34, 211, 238, 0.55)" : "rgba(34, 211, 238, 0.35)";
+    ctx.shadowColor = "#22d3ee";
+    ctx.shadowBlur = isHover ? 16 : 8;
+  } else if (!ready) {
+    ctx.fillStyle = "rgba(100,116,139,0.22)";
+  } else {
+    // ready mais pas de fric → grisé rouge
+    ctx.fillStyle = "rgba(239,68,68,0.18)";
+  }
+  roundedRect(ctx, btnX, btnY, btnW, btnH, 8);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = enabled ? "#22d3ee" : (ready ? "rgba(239,68,68,0.55)" : "rgba(255,255,255,0.15)");
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
+
+  // Label
+  ctx.fillStyle = enabled ? "#fff" : COLORS.hudMuted;
+  ctx.font = "bold 13px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  if (!ready) {
+    ctx.fillText(`💥 ${Math.ceil(cd)}s`, btnX + btnW / 2, btnY + btnH / 2 - 4);
+  } else {
+    ctx.fillText("💥 IEM", btnX + btnW / 2, btnY + btnH / 2 - 4);
+  }
+  // Coût
+  ctx.font = "bold 10px -apple-system, sans-serif";
+  ctx.fillStyle = canAfford ? "#fbbf24" : "rgba(239,68,68,0.85)";
+  ctx.fillText(`${IEM_COST} 💰`, btnX + btnW / 2, btnY + btnH / 2 + 10);
+
+  // Barre de cooldown
+  if (!ready) {
+    const ratio = 1 - cd / IEM_COOLDOWN_SEC;
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(btnX + 2, btnY + btnH - 4, btnW - 4, 2);
+    ctx.fillStyle = "#22d3ee";
+    ctx.fillRect(btnX + 2, btnY + btnH - 4, (btnW - 4) * ratio, 2);
+  }
+}
+
+// Effet visuel : flash blanc plein écran qui s'estompe + texte "IEM" central.
+function drawIemFx(ctx) {
+  if (!game.iem) return;
+  const t = game.iem.age / game.iem.ttl;
+  // Flash : pic à 0.15 puis fade
+  const alpha = t < 0.15 ? t / 0.15 : Math.max(0, 1 - (t - 0.15) / 0.85);
+  ctx.save();
+  ctx.fillStyle = `rgba(165, 243, 252, ${(alpha * 0.65).toFixed(3)})`;
+  ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+  // Onde de choc circulaire au centre du lanceur (gauche ou droite)
+  const cx = game.iem.side === "player" ? CONFIG.BASE_W / 2 : CONFIG.W - CONFIG.BASE_W / 2;
+  const cy = CONFIG.H / 2;
+  // Repère monde → écran
+  const sx = cx - game.camera.x;
+  const sy = cy;
+  const radius = (t * 1.4) * Math.max(CONFIG.CANVAS_W, CONFIG.H);
+  ctx.strokeStyle = `rgba(34, 211, 238, ${(alpha * 0.9).toFixed(3)})`;
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = `rgba(255, 255, 255, ${(alpha * 0.6).toFixed(3)})`;
+  ctx.beginPath();
+  ctx.arc(sx, sy, radius * 0.7, 0, Math.PI * 2);
+  ctx.stroke();
+  // Texte central
+  if (t < 0.6) {
+    const ta = Math.max(0, 1 - t / 0.6);
+    ctx.fillStyle = `rgba(255,255,255,${ta.toFixed(3)})`;
+    ctx.font = `bold ${Math.round(56 + 24 * t)}px -apple-system, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("⚡ IEM ⚡", CONFIG.CANVAS_W / 2, CONFIG.H / 2);
+  }
+  ctx.restore();
 }
 
 function drawLightningButton(ctx) {
@@ -5169,6 +5361,19 @@ function setupInput(canvas) {
       return;
     }
 
+    // 1bis bis) Bouton IEM — tir instantané, pas de visée
+    if (game.ui.iemBtn && pointInRect(sx, sy, game.ui.iemBtn)) {
+      audio.playSFX("click");
+      if (game.mode === "mp" && game.mp?.role === "guest") {
+        if (game[mySide()].money < IEM_COST) return;
+        if (iemCdFor(mySide()) > 0) return;
+        window.RE_MP.sendInput({ type: "iem_fire" });
+      } else {
+        fireIem(mySide());
+      }
+      return;
+    }
+
     // 1ter) Bouton Abandonner (MP host/guest) ou Quitter (spectateur)
     if (game.ui.surrenderBtn && pointInRect(sx, sy, game.ui.surrenderBtn)) {
       audio.playSFX("click");
@@ -5431,6 +5636,16 @@ function setupInput(canvas) {
     if (evt.key === "l" || evt.key === "L") {
       toggleLightningAim();
     }
+    // IEM → tir instantané (coûte de l'argent)
+    if (evt.key === "j" || evt.key === "J") {
+      if (game.mode === "mp" && game.mp?.role === "guest") {
+        if (game[mySide()].money >= IEM_COST && iemCdFor(mySide()) <= 0) {
+          window.RE_MP.sendInput({ type: "iem_fire" });
+        }
+      } else {
+        fireIem(mySide());
+      }
+    }
     // Echap → annule le mode visée
     if (evt.key === "Escape" && game.lightningAiming) {
       game.lightningAiming = false;
@@ -5472,8 +5687,11 @@ function resetGame() {
   game.explosions = [];
   game.lightning = null;
   game.lightningCooldown = 0;
+  game.iem = null;
+  game.iemCooldown = 0;
   if (game.mp) {
     game.mp.enemyLightningCooldown = 0;
+    game.mp.enemyIemCooldown = 0;
     game.mp.snapAccum = 0;
   }
   game.stats = { player: makeStats(), enemy: makeStats() };
@@ -5536,16 +5754,17 @@ function startTutorial() {
   audio.startMusic();
 }
 
-// Overlay banner du tutoriel — affiché en bas-milieu de l'écran pour ne pas
-// gêner le HUD du haut. Cliquer sur "Compris !" avance à l'étape suivante.
+// Bannière du tutoriel — placée en haut-gauche sous le HUD pour ne pas
+// chevaucher la map ni les unités. Le coin haut-droit est libre du fait
+// du surrender / settings, et la minimap est au centre.
 function drawTutorialOverlay(ctx) {
   if (!game.tutorial?.active) { game.ui.tutorialRects = null; return; }
   const step = TUTORIAL_STEPS[game.tutorial.step];
   if (!step) { game.tutorial.active = false; return; }
 
-  const W = 720, H = 130;
-  const x = (CONFIG.CANVAS_W - W) / 2;
-  const y = CONFIG.H - H - 24;
+  const W = 460, H = 130;
+  const x = 16;
+  const y = CONFIG.HUD_H + 8;
 
   ctx.save();
   ctx.fillStyle = "rgba(15,23,42,0.94)";
@@ -5648,6 +5867,10 @@ function goToMenu() {
   game.ui.chatMessages = [];
   game.ui.emoteMenuOpen = false;
   game.ui.emoteEvents = [];
+  // Reset des couleurs MP (le skin du peer pouvait avoir teinté enemy/player)
+  COLORS.enemy = DEFAULT_ENEMY_COLOR;
+  COLORS.enemyDark = DEFAULT_ENEMY_DARK;
+  applyTeamSkin();
 }
 
 // -------------------------------------------------------------
@@ -5700,6 +5923,17 @@ function startMultiplayer() {
     window.RE_MP.onStart(handleMpStart);
     window.RE_MP.onChat(handleMpChat);
     window.RE_MP.onEmote(handleMpEmote);
+    window.RE_MP.onPeerInfo(({ skin, username, from }) => {
+      if (skin) applyPeerSkin(skin);
+      // Met aussi à jour le username affiché en MP (host/guest)
+      if (game.mp && username) {
+        if (from === "host") game.mp.hostUsername = username;
+        if (from === "guest") game.mp.guestUsername = username;
+        if (!game.mp.opponent || game.mp.opponent.username !== username) {
+          game.mp.opponent = { id: game.mp.opponent?.id || null, username };
+        }
+      }
+    });
     game.mp.subscribed = true;
   }
   // Démarre la première récupération de la liste des salons publics.
@@ -6731,7 +6965,9 @@ function buildMpSnapshot() {
     attackFx: game.attackFx.slice(-40).map((fx) => ({ ...fx })),
     explosions: game.explosions.slice(-12).map((ex) => ({ ...ex })),
     lightning: game.lightning ? { ...game.lightning, segments: game.lightning.segments?.slice() || [] } : null,
+    iem: game.iem ? { ...game.iem } : null,
     cd: { player: game.lightningCooldown, enemy: game.mp?.enemyLightningCooldown || 0 },
+    iemCd: { player: game.iemCooldown || 0, enemy: game.mp?.enemyIemCooldown || 0 },
     stats: { player: game.stats.player, enemy: game.stats.enemy },
     gameOver: game.gameOver ? { winner: game.gameOver.winner } : null,
   };
@@ -6842,9 +7078,13 @@ function applyMpSnapshot(snap) {
   game.attackFx = Array.isArray(snap.attackFx) ? snap.attackFx.map((fx) => ({ ...fx })) : [];
   game.explosions = Array.isArray(snap.explosions) ? snap.explosions.map((ex) => ({ ...ex })) : [];
   game.lightning = snap.lightning ? { ...snap.lightning } : null;
+  game.iem = snap.iem ? { ...snap.iem } : null;
   if (snap.cd) {
     // Sur le guest, "ma" lightning cd est celle de mon côté
     game.lightningCooldown = snap.cd[mySide()] ?? 0;
+  }
+  if (snap.iemCd) {
+    game.iemCooldown = snap.iemCd[mySide()] ?? 0;
   }
   if (snap.stats) {
     // Snapshot des stats (host autoritaire) — permet au guest d'avoir un
@@ -6888,6 +7128,9 @@ function handleMpInput(input) {
       break;
     case "lightning_fire":
       fireLightningAt(input.x, side);
+      break;
+    case "iem_fire":
+      fireIem(side);
       break;
     default:
       console.warn("[MP] input inconnu:", input);
