@@ -193,24 +193,28 @@ function defaultUpgrades() {
 // Stats effectives d'une factory une fois ses upgrades appliquées
 function effectiveProdInterval(factory) {
   const base = FACTORY_TYPES[factory.typeId].prodInterval;
-  return base / statMultiplier(factory.upgrades.creationRate, 0.20);
+  const tier = factory.tier || 1;
+  // Les factories fusionnées produisent un poil plus vite (× 0.85 / 0.65)
+  return base * (TIER_PROD_MULTIPLIER[tier] || 1) / statMultiplier(factory.upgrades.creationRate, 0.20);
 }
 
 // Stats effectives des unités spawnées par une factory (à figer au moment du spawn)
 function spawnStatsFor(factory) {
   const ut = UNIT_TYPES[FACTORY_TYPES[factory.typeId].unitType];
   const u = factory.upgrades;
+  const tier = factory.tier || 1;
+  const tierMult = TIER_MULTIPLIER[tier] || 1;
   return {
-    hp:             ut.hp        * statMultiplier(u.health, 0.25),
-    damage:         ut.damage    * statMultiplier(u.power, 0.22),
+    hp:             ut.hp        * statMultiplier(u.health, 0.25) * tierMult,
+    damage:         ut.damage    * statMultiplier(u.power, 0.22)  * tierMult,
     speed:          ut.speed     * statMultiplier(u.speed, 0.15),
     range:          ut.range     * statMultiplier(u.range, 0.12),
-    radius:         ut.radius,
+    radius:         ut.radius * (tier === 1 ? 1 : tier === 2 ? 1.15 : 1.30),
     attackInterval: ut.attackInterval / statMultiplier(u.shootRate, 0.18),
-    killReward:     ut.killReward,
-    // Layer + capacités anti-air (sniper et air)
+    killReward:     Math.round(ut.killReward * (tier === 1 ? 1 : tier === 2 ? 1.5 : 2.2)),
     layer:          ut.layer || "ground",
     canTargetAir:   !!ut.canTargetAir,
+    tier,
   };
 }
 
@@ -1196,7 +1200,7 @@ function tryPlaceFactory(side, slotIndex, typeId) {
   if (game.mode !== "mp" && side !== "player") return false;
   const state = game[side];
   const slot = state.slots[slotIndex];
-  if (!slot || slot.factory) return false;
+  if (!slot || slot.factory || slot.coveredBy != null) return false;
   if (slot.isPath) return false; // pas de construction sur le path
   const type = FACTORY_TYPES[typeId];
   if (!type) return false;
@@ -1217,9 +1221,127 @@ function tryPlaceFactory(side, slotIndex, typeId) {
     upgrades: defaultUpgrades(),
     totalInvested: type.cost,
     mode: "attack",
+    tier: 1,                          // 1, 2 (1x2) ou 3 (2x2) — augmenté par la fusion
+    spanSlots: [slotIndex],           // indices des slots couverts par cette factory
   };
   audio.playSFX("place");
   if (side === "player") tutorialOnAction("build_factory");
+  return true;
+}
+
+// ── FUSION ──────────────────────────────────────────────────────────────
+// Multiplicateur de stats appliqué aux unités produites par une factory fusionnée.
+const TIER_MULTIPLIER = { 1: 1.0, 2: 1.55, 3: 2.40 };
+// Multiplicateur de PV de la factory elle-même
+const TIER_HP_MULTIPLIER = { 1: 1.0, 2: 2.0, 3: 3.6 };
+// Multiplicateur de cadence (plus tier = plus rapide)
+const TIER_PROD_MULTIPLIER = { 1: 1.0, 2: 0.85, 3: 0.65 };
+
+function tierLabel(tier) {
+  return tier === 3 ? "TIER III" : tier === 2 ? "TIER II" : "TIER I";
+}
+
+// Vérifie si deux slots de factories adjacentes peuvent fusionner.
+function canMergeFactories(side, aIdx, bIdx) {
+  const state = game[side];
+  const a = state.slots[aIdx];
+  const b = state.slots[bIdx];
+  if (!a || !b || !a.factory || !b.factory) return false;
+  if (a.factory.typeId !== b.factory.typeId) return false;
+  const tier = a.factory.tier || 1;
+  if ((b.factory.tier || 1) !== tier) return false;
+  if (tier >= 3) return false; // tier max
+  const aSpan = (a.factory.spanSlots || [aIdx]).map((i) => state.slots[i]);
+  const bSpan = (b.factory.spanSlots || [bIdx]).map((i) => state.slots[i]);
+  if (tier === 1) {
+    // Tier 1+1 : horizontalement adjacents (même rangée, col±1)
+    return a.row === b.row && Math.abs(a.col - b.col) === 1;
+  }
+  // Tier 2+2 : verticalement adjacents (rangées consécutives), mêmes colonnes
+  if (tier === 2) {
+    const aCols = aSpan.map((s) => s.col).sort();
+    const bCols = bSpan.map((s) => s.col).sort();
+    if (aCols.length !== 2 || bCols.length !== 2) return false;
+    if (aCols[0] !== bCols[0] || aCols[1] !== bCols[1]) return false;
+    const aRows = aSpan.map((s) => s.row);
+    const bRows = bSpan.map((s) => s.row);
+    if (new Set(aRows).size !== 1 || new Set(bRows).size !== 1) return false;
+    return Math.abs(aRows[0] - bRows[0]) === 1;
+  }
+  return false;
+}
+
+// Trouve une factory voisine fusionnable de slot, retourne son index ou null.
+function findMergePartner(side, slotIdx) {
+  const state = game[side];
+  for (let i = 0; i < state.slots.length; i++) {
+    if (i === slotIdx) continue;
+    if (canMergeFactories(side, slotIdx, i)) return i;
+  }
+  return null;
+}
+
+function tryMergeFactories(side, aIdx, bIdx) {
+  if (!canMergeFactories(side, aIdx, bIdx)) return false;
+  const state = game[side];
+  const a = state.slots[aIdx];
+  const b = state.slots[bIdx];
+
+  // Le slot "primary" est le plus en haut/gauche — toute la factory y vit.
+  const primaryIsA = (a.row < b.row) || (a.row === b.row && a.col < b.col);
+  const primary = primaryIsA ? a : b;
+  const other = primaryIsA ? b : a;
+  const primaryIdx = primaryIsA ? aIdx : bIdx;
+  const otherIdx = primaryIsA ? bIdx : aIdx;
+
+  const oldTier = primary.factory.tier || 1;
+  const newTier = oldTier + 1;
+
+  // Span complet : union de a.span + b.span
+  const aSpan = a.factory.spanSlots || [aIdx];
+  const bSpan = b.factory.spanSlots || [bIdx];
+  const span = Array.from(new Set([...aSpan, ...bSpan]));
+
+  // Upgrades fusionnés : prend le max de chaque stat
+  const mergedUpgrades = {};
+  const allStats = new Set([
+    ...Object.keys(a.factory.upgrades || {}),
+    ...Object.keys(b.factory.upgrades || {}),
+  ]);
+  for (const k of allStats) {
+    mergedUpgrades[k] = Math.max(
+      a.factory.upgrades?.[k] || 0,
+      b.factory.upgrades?.[k] || 0,
+    );
+  }
+
+  const type = FACTORY_TYPES[primary.factory.typeId];
+  const totalInvested = a.factory.totalInvested + b.factory.totalInvested;
+  const tierHp = type.hp * TIER_HP_MULTIPLIER[newTier];
+
+  primary.factory = {
+    typeId: primary.factory.typeId,
+    side,
+    hp: tierHp,
+    prodTimer: 0,
+    level: 1,
+    upgrades: mergedUpgrades,
+    totalInvested,
+    mode: primary.factory.mode || "attack",
+    tier: newTier,
+    spanSlots: span,
+  };
+  primary.coveredBy = null;
+
+  // Tous les autres slots du span pointent vers primary
+  for (const idx of span) {
+    if (idx === primaryIdx) continue;
+    const s = state.slots[idx];
+    s.factory = null;
+    s.coveredBy = primaryIdx;
+  }
+
+  audio.playSFX("upgrade");
   return true;
 }
 
@@ -1247,11 +1369,24 @@ function tryUpgradeFactory(side, slotIndex, statId) {
 // Vend une factory : rembourse 50% du totalInvested
 function sellFactory(side, slotIndex) {
   const state = game[side];
-  const slot = state.slots[slotIndex];
-  if (!slot || !slot.factory) return false;
+  let slot = state.slots[slotIndex];
+  if (!slot) return false;
+  // Si on cible un slot couvert par une fusion, on remonte au primary
+  if (slot.coveredBy != null) {
+    slot = state.slots[slot.coveredBy];
+    if (!slot) return false;
+  }
+  if (!slot.factory) return false;
   const refund = Math.floor(slot.factory.totalInvested * SELL_RATIO);
   state.money += refund;
-  slot.factory = null;
+  // Libère tous les slots couverts par la fusion
+  const span = slot.factory.spanSlots || [state.slots.indexOf(slot)];
+  for (const idx of span) {
+    const s = state.slots[idx];
+    if (!s) continue;
+    s.factory = null;
+    s.coveredBy = null;
+  }
   audio.playSFX("sell");
   return refund;
 }
@@ -2289,6 +2424,9 @@ function drawSlots(ctx, side) {
   state.slots.forEach((slot, idx) => {
     if (slot.isPath) return;
 
+    // Slot couvert par une factory fusionnée → on saute (le primary dessine)
+    if (slot.coveredBy != null) return;
+
     let fill = COLORS.slotEmpty;
     let strokeColor = COLORS.slotBorder;
 
@@ -2410,15 +2548,43 @@ function drawFactory(ctx, slot, side) {
   const type = FACTORY_TYPES[f.typeId];
   const spriteName = `factory-${f.typeId}-${side}`;
   const inset = 3;
-  const x = slot.x + inset;
-  const y = slot.y + inset;
-  const w = slot.size - inset * 2;
-  const h = slot.size - inset * 2;
+
+  // Boîte englobant tout le span de la factory (1 slot pour tier 1, 2 pour tier 2, 4 pour tier 3)
+  const span = (f.spanSlots || []).map((idx) => game[side].slots[idx]).filter(Boolean);
+  let bx = slot.x, by = slot.y, bw = slot.size, bh = slot.size;
+  if (span.length > 1) {
+    bx = Math.min(...span.map((s) => s.x));
+    by = Math.min(...span.map((s) => s.y));
+    const maxX = Math.max(...span.map((s) => s.x + s.size));
+    const maxY = Math.max(...span.map((s) => s.y + s.size));
+    bw = maxX - bx;
+    bh = maxY - by;
+  }
+  const x = bx + inset;
+  const y = by + inset;
+  const w = bw - inset * 2;
+  const h = bh - inset * 2;
+
+  // Halo coloré pour tier 2/3 (rend la factory bien visible)
+  const tier = f.tier || 1;
+  if (tier > 1) {
+    ctx.save();
+    const accent = tier === 2 ? "#22d3ee" : "#fbbf24";
+    ctx.fillStyle = hexToRgba(accent, 0.18);
+    roundedRect(ctx, x - 2, y - 2, w + 4, h + 4, 8);
+    ctx.fill();
+    ctx.strokeStyle = hexToRgba(accent, 0.85);
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 10;
+    ctx.stroke();
+    ctx.restore();
+  }
 
   if (sprites[spriteName]) {
+    // Pour les factories étendues, on étire le sprite pour remplir la zone
     ctx.drawImage(sprites[spriteName], x, y, w, h);
   } else {
-    // Placeholder polish — silhouette par type
     drawFactoryPlaceholder(ctx, f.typeId, side, x, y, w, h);
   }
 
@@ -2435,11 +2601,26 @@ function drawFactory(ctx, slot, side) {
     ctx.fillText("🛡", x + w - 6, y + 6);
   }
 
+  // Badge tier (haut-gauche) : "II" ou "III" sur les factories fusionnées
+  if (tier > 1) {
+    const accent = tier === 2 ? "#22d3ee" : "#fbbf24";
+    const tag = tier === 2 ? "II" : "III";
+    ctx.save();
+    ctx.fillStyle = accent;
+    roundedRect(ctx, x + 4, y + 4, 22, 14, 4);
+    ctx.fill();
+    ctx.fillStyle = "#0a0e1a";
+    ctx.font = "bold 9px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(tag, x + 4 + 11, y + 4 + 7);
+    ctx.restore();
+  }
+
   // Étoiles d'amélioration (en bas du sprite, basé sur somme des niveaux d'upgrade)
   const totalLevels = Object.values(f.upgrades).reduce((a, v) => a + v, 0);
   if (totalLevels > 0) {
     drawFactoryStars(ctx, x, y + h - 11, w, totalLevels);
-    // La barre de prod est décalée plus haut pour ne pas écraser les étoiles
     drawProdBar(ctx, f, type, x, y + h - 14, w);
   } else {
     drawProdBar(ctx, f, type, x, y + h - 4, w);
@@ -3269,10 +3450,39 @@ function drawUpgradePanel(ctx) {
   ctx.stroke();
   cursorY += 8;
 
+  // Bouton Fusionner — visible si une factory voisine compatible existe
+  const ownerSide = side;
+  const isOwner = ownerSide === mySide();
+  const slotIdx = game[side].slots.indexOf(slot);
+  const partnerIdx = isOwner ? findMergePartner(side, slotIdx) : null;
+  const canMerge = partnerIdx != null && (factory.tier || 1) < 3;
+  if (canMerge) {
+    const mergeRect = { x: x + 12, y: cursorY, w: w - 24, h: 34 };
+    const mergeHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, mergeRect);
+    const accent = (factory.tier || 1) === 1 ? "#22d3ee" : "#fbbf24";
+    ctx.save();
+    ctx.fillStyle = mergeHover ? hexToRgba(accent, 0.45) : hexToRgba(accent, 0.25);
+    if (mergeHover) { ctx.shadowColor = accent; ctx.shadowBlur = 10; }
+    roundedRect(ctx, mergeRect.x, mergeRect.y, mergeRect.w, mergeRect.h, 6);
+    ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 12px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const nextTier = (factory.tier || 1) + 1;
+    ctx.fillText(`⚡ Fusionner → ${tierLabel(nextTier)}`, mergeRect.x + mergeRect.w / 2, mergeRect.y + mergeRect.h / 2);
+    rects.merge = { rect: mergeRect, partnerIdx };
+    cursorY += 40;
+  }
+
   // Bouton Sell
   const refund = Math.floor(factory.totalInvested * SELL_RATIO);
   const sellRect = { x: x + 12, y: cursorY, w: w - 24, h: 34 };
-  const sellEnabled = side === "player";
+  const sellEnabled = ownerSide === mySide();
   const sellHover = sellEnabled && pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, sellRect);
   ctx.fillStyle = sellEnabled
     ? (sellHover ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.22)")
@@ -5443,6 +5653,17 @@ function setupInput(canvas) {
       }
       const mineSide = mySide();
       const isGuestMp = game.mode === "mp" && game.mp?.role === "guest";
+      // Bouton Fusionner (apparaît si voisin compatible)
+      if (sel.side === mineSide && !isTurretPanel && pr.merge && pointInRect(sx, sy, pr.merge.rect)) {
+        if (isGuestMp) {
+          window.RE_MP.sendInput({ type: "merge_factory", slotIndex: sel.slotIndex, partnerIdx: pr.merge.partnerIdx });
+        } else {
+          tryMergeFactories(mineSide, sel.slotIndex, pr.merge.partnerIdx);
+        }
+        audio.playSFX("upgrade");
+        game.ui.upgradePanel = null;
+        return;
+      }
       if (sel.side === mineSide && pr.sell && pointInRect(sx, sy, pr.sell)) {
         if (isGuestMp) {
           if (isTurretPanel) window.RE_MP.sendInput({ type: "sell_turret", wallSlotIndex: sel.index });
@@ -5679,12 +5900,20 @@ function setupInput(canvas) {
     const mySlotIdx = findSlotAt(me, wx, wy);
     if (mySlotIdx >= 0) {
       const slot = game[me].slots[mySlotIdx];
+      // Click sur un slot couvert par une fusion → ouvre le panneau du primary
+      if (slot.coveredBy != null) {
+        const primaryIdx = slot.coveredBy;
+        if (game[me].slots[primaryIdx]?.factory) {
+          game.ui.upgradePanel = { side: me, type: "factory", slotIndex: primaryIdx };
+          game.ui.selectedBuildType = null;
+        }
+        return;
+      }
       if (game.ui.selectedBuildType && FACTORY_TYPES[game.ui.selectedBuildType]
           && !slot.factory && !slot.isPath) {
         if (isGuest) {
           window.RE_MP.sendInput({ type: "build_factory", slotIndex: mySlotIdx, typeId: game.ui.selectedBuildType });
           audio.playSFX("place");
-          // On présume succès côté UX, l'auto-reset du selected sera repris quand snap reviendra
         } else {
           const placed = tryPlaceFactory(me, mySlotIdx, game.ui.selectedBuildType);
           if (placed) {
@@ -5705,6 +5934,13 @@ function setupInput(canvas) {
     const oppSlotIdx = findSlotAt(opp, wx, wy);
     if (oppSlotIdx >= 0) {
       const slot = game[opp].slots[oppSlotIdx];
+      if (slot.coveredBy != null) {
+        const primaryIdx = slot.coveredBy;
+        if (game[opp].slots[primaryIdx]?.factory) {
+          game.ui.upgradePanel = { side: opp, type: "factory", slotIndex: primaryIdx };
+        }
+        return;
+      }
       if (slot.factory) {
         game.ui.upgradePanel = { side: opp, type: "factory", slotIndex: oppSlotIdx };
         return;
@@ -7340,9 +7576,17 @@ function serializeSide(side) {
     baseHP: s.baseHP,
     baseHPMax: s.baseHPMax,
     slots: s.slots.map((slot) => {
-      if (!slot.factory) return null;
+      if (!slot.factory) {
+        // On note coveredBy pour reconstruire les fusions côté guest
+        return slot.coveredBy != null ? { coveredBy: slot.coveredBy } : null;
+      }
       const f = slot.factory;
-      return { typeId: f.typeId, hp: f.hp, level: f.level, upgrades: { ...f.upgrades }, totalInvested: f.totalInvested, mode: f.mode };
+      return {
+        typeId: f.typeId, hp: f.hp, level: f.level,
+        upgrades: { ...f.upgrades }, totalInvested: f.totalInvested, mode: f.mode,
+        tier: f.tier || 1,
+        spanSlots: f.spanSlots || null,
+      };
     }),
     wallTurrets: s.wallSlots.map((w) => {
       if (!w.turret) return null;
@@ -7390,15 +7634,24 @@ function applySerializedSide(side, ser) {
     for (let i = 0; i < ser.slots.length && i < local.slots.length; i++) {
       const inc = ser.slots[i];
       const slot = local.slots[i];
-      if (!inc) { slot.factory = null; continue; }
+      if (!inc) { slot.factory = null; slot.coveredBy = null; continue; }
+      // Slot couvert par une fusion : pas de factory propre, juste un pointeur
+      if (inc.coveredBy != null) {
+        slot.factory = null;
+        slot.coveredBy = inc.coveredBy;
+        continue;
+      }
       const baseType = FACTORY_TYPES[inc.typeId];
       if (!baseType) continue;
+      slot.coveredBy = null;
       if (!slot.factory) {
         slot.factory = {
           typeId: inc.typeId, side, hp: inc.hp, prodTimer: 0,
           level: inc.level || 1, upgrades: inc.upgrades || defaultUpgrades(),
           totalInvested: inc.totalInvested || baseType.cost,
           mode: inc.mode || "attack",
+          tier: inc.tier || 1,
+          spanSlots: inc.spanSlots || [i],
         };
       } else {
         slot.factory.typeId = inc.typeId;
@@ -7407,6 +7660,8 @@ function applySerializedSide(side, ser) {
         slot.factory.upgrades = inc.upgrades || defaultUpgrades();
         slot.factory.totalInvested = inc.totalInvested || slot.factory.totalInvested;
         slot.factory.mode = inc.mode || slot.factory.mode;
+        slot.factory.tier = inc.tier || 1;
+        slot.factory.spanSlots = inc.spanSlots || [i];
       }
     }
   }
@@ -7536,6 +7791,9 @@ function handleMpInput(input) {
       break;
     case "iem_fire":
       fireIem(side);
+      break;
+    case "merge_factory":
+      tryMergeFactories(side, input.slotIndex, input.partnerIdx);
       break;
     default:
       console.warn("[MP] input inconnu:", input);
