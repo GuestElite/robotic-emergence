@@ -498,7 +498,7 @@ const audio = {
     this.musicEnabled = on;
     if (on && game.screen === "playing") {
       this.startMusic();
-      this.startAmbient(game.biome);
+      // Ambient continu désactivé — joué seulement pendant tumbleweed
     } else {
       this.stopMusic();
       this.stopAmbient();
@@ -3354,6 +3354,9 @@ function spawnTumbleweed() {
     rotationSpeed: dir * (3 + Math.random() * 3),  // rad/s
     age: 0,
   });
+  // Vent ponctuel qui accompagne le tumbleweed (le son ambient continu
+  // a été retiré ailleurs ; il ne joue que pendant ces séquences).
+  audio.startAmbient(game.biome);
 }
 
 function spawnWeather(type) {
@@ -3432,6 +3435,7 @@ function updateAmbientAnims(dt) {
   }
 
   // ── Cleanup : tumbleweeds arrivés à destination, weather events expirés sans particules restantes
+  const hadTumbleweed = game.ambientAnims.active.some((ev) => ev.type === "tumbleweed");
   game.ambientAnims.active = game.ambientAnims.active.filter((ev) => {
     if (ev.type === "tumbleweed") {
       // Arrivé à destination (selon direction)
@@ -3441,6 +3445,11 @@ function updateAmbientAnims(dt) {
     // Weather : on garde tant que la durée n'est pas finie OU qu'il reste des particules
     return ev.age < ev.ttl || ev.particles.length > 0;
   });
+  // Stoppe le vent ambient quand le dernier tumbleweed est sorti de scène
+  const stillTumbleweed = game.ambientAnims.active.some((ev) => ev.type === "tumbleweed");
+  if (hadTumbleweed && !stillTumbleweed) {
+    audio.stopAmbient();
+  }
 }
 
 function drawAmbientAnims(ctx) {
@@ -6543,7 +6552,8 @@ function startGame(difficulty) {
   game.screen = "playing";
   saveSettings();
   audio.startMusic();
-  audio.startAmbient(game.biome);
+  // Ambient continu désactivé : le son ambient est désormais joué ponctuellement
+  // lors d'événements (ex. tumbleweed désert). Voir spawnTumbleweed.
 }
 
 function goToMenu() {
@@ -6960,7 +6970,7 @@ function startMpGame() {
     game.camera.x = maxScroll;
   }
   audio.startMusic();
-  audio.startAmbient(game.biome);
+  // Ambient continu désactivé (cf. startGame solo)
 }
 
 async function cancelMultiplayer() {
