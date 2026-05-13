@@ -553,8 +553,23 @@ const game = {
     settingsOpen: false,
     settingsRects: null,
     draggingSlider: null,         // "music" | "sfx" pendant un drag de volume
+    lobbyRects: null,             // rects du screen "salle d'attente"
   },
+  // Mode courant. "solo" = vs bot. "mp" = multijoueur PvP synchronisé via Supabase Realtime.
+  mode: "solo",
+  // État multijoueur. Voir startMultiplayer() / multiplayer.js
+  mp: null,
 };
+
+// Retourne le côté que contrôle l'utilisateur courant.
+// Solo ou host → "player" (gauche). Guest MP → "enemy" (droite).
+function mySide() {
+  if (game.mode === "mp" && game.mp?.role === "guest") return "enemy";
+  return "player";
+}
+function oppSide() {
+  return mySide() === "player" ? "enemy" : "player";
+}
 
 // -------------------------------------------------------------
 // Turret : nouveau type de bâtiment placé sur le rempart
@@ -971,7 +986,7 @@ function buildSlots() {
 }
 
 function tryPlaceTurret(side, wallSlotIndex) {
-  if (side !== "player") return false;
+  if (game.mode !== "mp" && side !== "player") return false;
   const state = game[side];
   const slot = state.wallSlots[wallSlotIndex];
   if (!slot || slot.turret) return false;
@@ -1031,7 +1046,7 @@ function sellTurret(side, wallSlotIndex) {
 
 // Achète un upgrade pour une turret. Applique immédiatement le bonus à l'unité.
 function tryUpgradeTurret(side, wallSlotIndex, statId) {
-  if (side !== "player") return false;
+  if (game.mode !== "mp" && side !== "player") return false;
   const state = game[side];
   const slot = state.wallSlots[wallSlotIndex];
   if (!slot || !slot.turret) return false;
@@ -1119,7 +1134,9 @@ function getEnemyBorderX(unitSide) {
 // -------------------------------------------------------------
 
 function tryPlaceFactory(side, slotIndex, typeId) {
-  if (side !== "player") return false; // V0 : seul le joueur place manuellement
+  // En solo, seul le joueur place manuellement (l'AI gère l'enemy via updateEnemyAI).
+  // En multijoueur, les deux côtés sont contrôlés par des humains, donc on autorise les deux.
+  if (game.mode !== "mp" && side !== "player") return false;
   const state = game[side];
   const slot = state.slots[slotIndex];
   if (!slot || slot.factory) return false;
@@ -1530,15 +1547,28 @@ function checkGameOver() {
   if (game.gameOver) return;
   if (game.player.baseHP <= 0) {
     game.gameOver = { winner: "enemy" };
-    audio.playSFX("lose");
+    audio.playSFX(mySide() === "enemy" ? "win" : "lose");
     audio.stopMusic();
-    sendGameResultToBackend("lose");
+    notifyGameOver("enemy");
   } else if (game.enemy.baseHP <= 0) {
     game.gameOver = { winner: "player" };
-    audio.playSFX("win");
+    audio.playSFX(mySide() === "player" ? "win" : "lose");
     audio.stopMusic();
-    sendGameResultToBackend("win");
+    notifyGameOver("player");
   }
+}
+
+// Notifie le backend (solo) ou diffuse en MP (host) la fin de partie.
+function notifyGameOver(winnerSide) {
+  if (game.mode === "mp" && game.mp?.role === "host" && window.RE_MP) {
+    const mappedWinner = winnerSide === "player" ? "host" : "guest";
+    try { window.RE_MP.sendGameOver(winnerSide); } catch {}
+    try { window.RE_MP.reportFinish(mappedWinner); } catch {}
+    return;
+  }
+  // Solo : on remonte le résultat du joueur (gauche).
+  const result = winnerSide === "player" ? "win" : "lose";
+  sendGameResultToBackend(result);
 }
 
 // Pousse les stats de partie vers Supabase (via auth-bridge.js).
@@ -1653,10 +1683,22 @@ function update(dt) {
     }
     return;
   }
+  // Le guest en MP n'est qu'un client de rendu — toute la simulation est
+  // calculée par le host, qui envoie des snapshots via Realtime broadcast.
+  const isGuest = game.mode === "mp" && game.mp?.role === "guest";
+  if (isGuest) {
+    // On laisse juste tourner la caméra et la mise à jour de la souris,
+    // les structures (units, factories, etc.) sont écrasées par les snapshots reçus.
+    updateCamera(dt);
+    game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
+    game.ui.mouse.y = game.ui.mouseScreen.y;
+    return;
+  }
   game.time += dt;
   updateCamera(dt);
   updateLightning(dt);
-  updateEnemyAI(dt);
+  // En MP host, on désactive le bot : c'est le guest qui joue le côté enemy.
+  if (game.mode !== "mp") updateEnemyAI(dt);
   updateFactories(dt);
   updateUnits(dt);
   resolvePropCollisions();
@@ -1665,13 +1707,38 @@ function update(dt) {
   checkGameOver();
   game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
   game.ui.mouse.y = game.ui.mouseScreen.y;
+
+  // MP host : broadcast un snapshot d'état à ~12 Hz
+  if (game.mode === "mp" && game.mp?.role === "host" && window.RE_MP) {
+    game.mp.snapAccum = (game.mp.snapAccum || 0) + dt;
+    if (game.mp.snapAccum >= (1 / 12)) {
+      game.mp.snapAccum = 0;
+      try { window.RE_MP.sendSnapshot(buildMpSnapshot()); } catch (e) { console.warn("[MP] snapshot send", e); }
+    }
+  }
 }
 
 function updateLightning(dt) {
   if (game.lightningCooldown > 0) game.lightningCooldown = Math.max(0, game.lightningCooldown - dt);
+  if (game.mode === "mp" && game.mp && game.mp.enemyLightningCooldown > 0) {
+    game.mp.enemyLightningCooldown = Math.max(0, game.mp.enemyLightningCooldown - dt);
+  }
   if (!game.lightning) return;
   game.lightning.age += dt;
   if (game.lightning.age >= game.lightning.ttl) game.lightning = null;
+}
+
+// Retourne le cooldown de foudre courant pour un côté donné.
+// En solo, on n'utilise que game.lightningCooldown (côté player).
+// En MP, le host a 2 cooldowns : game.lightningCooldown (player) et game.mp.enemyLightningCooldown (enemy).
+function lightningCdFor(side) {
+  if (side === "player") return game.lightningCooldown;
+  if (game.mode === "mp" && game.mp) return game.mp.enemyLightningCooldown || 0;
+  return 0;
+}
+function setLightningCdFor(side, value) {
+  if (side === "player") game.lightningCooldown = value;
+  else if (game.mode === "mp" && game.mp) game.mp.enemyLightningCooldown = value;
 }
 
 // Toggle du mode de visée (clic bouton Éclair / touche L)
@@ -1680,21 +1747,22 @@ function toggleLightningAim() {
     game.lightningAiming = false;  // cancel
     return false;
   }
-  if (game.lightningCooldown > 0) return false;
+  if (lightningCdFor(mySide()) > 0) return false;
   game.lightningAiming = true;
   return true;
 }
 
 // Tire la foudre à une position X donnée (le joueur a cliqué sur la map en aim mode)
-function fireLightningAt(targetX) {
-  if (game.lightningCooldown > 0) return false;
+// `side` indique qui tire (par défaut "player" pour le mode solo et le host).
+function fireLightningAt(targetX, side = "player") {
+  if (lightningCdFor(side) > 0) return false;
   // Clamp pour rester dans la zone de jeu
   const margin = LIGHTNING_KILL_HALF_WIDTH;
   const x = Math.max(margin, Math.min(CONFIG.W - margin, targetX));
   const y1 = CONFIG.HUD_H + 20;
   const y2 = CONFIG.H - 20;
-  game.lightning = { x, y1, y2, age: 0, ttl: LIGHTNING_TTL_SEC, segments: makeLightningSegments(x, y1, y2) };
-  game.lightningCooldown = LIGHTNING_COOLDOWN_SEC;
+  game.lightning = { x, y1, y2, age: 0, ttl: LIGHTNING_TTL_SEC, segments: makeLightningSegments(x, y1, y2), side };
+  setLightningCdFor(side, LIGHTNING_COOLDOWN_SEC);
   game.lightningAiming = false;
   // Tue tout ce qui se trouve dans la bande [x - half, x + half]
   let killsByPlayer = 0, killsByEnemy = 0;
@@ -1711,7 +1779,7 @@ function fireLightningAt(targetX) {
   }
   game.stats.player.unitsKilled += killsByPlayer;
   game.stats.enemy.unitsKilled += killsByEnemy;
-  game.stats.player.lightningsUsed++;
+  game.stats[side].lightningsUsed++;
   audio.playSFX("lightning");
   return true;
 }
@@ -1761,6 +1829,10 @@ function updateCamera(dt) {
 function render(ctx) {
   if (game.screen === "menu") {
     drawMenu(ctx);
+    return;
+  }
+  if (game.screen === "lobby") {
+    drawLobbyScreen(ctx);
     return;
   }
 
@@ -1962,7 +2034,7 @@ function drawRampart(ctx, side) {
 
 function drawSlots(ctx, side) {
   const state = game[side];
-  const isPlayer = side === "player";
+  const isPlayer = side === mySide();
   const hover = game.ui.hoverSlot;
   // Preview seulement pour les types de FACTORIES (pas pour turret qui se pose sur le mur)
   const previewActive = isPlayer && !!game.ui.selectedBuildType && !!FACTORY_TYPES[game.ui.selectedBuildType];
@@ -1990,7 +2062,7 @@ function drawSlots(ctx, side) {
     // APERÇU mode build : color-code les slots constructibles selon leur gate
     if (previewActive && !slot.factory) {
       const type = FACTORY_TYPES[game.ui.selectedBuildType];
-      const canAfford = game.player.money >= type.cost;
+      const canAfford = game[mySide()].money >= type.cost;
       const key = gateKeyForRow(gateRowFor(slot.row));
       if (canAfford) {
         fill = GATE_COLORS[key].fill;
@@ -2002,9 +2074,9 @@ function drawSlots(ctx, side) {
 
     // HOVER en mode build factory (turret est géré dans drawWallSlots)
     if (isPlayer && game.ui.selectedBuildType && FACTORY_TYPES[game.ui.selectedBuildType]
-        && hover && hover.side === "player" && hover.slotIndex === idx) {
+        && hover && hover.side === mySide() && hover.slotIndex === idx) {
       const type = FACTORY_TYPES[game.ui.selectedBuildType];
-      if (!slot.factory && game.player.money >= type.cost) {
+      if (!slot.factory && game[mySide()].money >= type.cost) {
         fill = COLORS.slotHover;
       } else {
         fill = COLORS.slotInvalid;
@@ -2661,7 +2733,7 @@ function drawUpgradePanel(ctx) {
     const isMax = lvl >= MAX_UPGRADE_LEVEL;
     const cost = isMax ? 0 : upgradeCost(stat, lvl);
     const canAfford = !isMax && state.money >= cost;
-    const isPlayer = side === "player";
+    const isPlayer = side === mySide();
     const enabled = isPlayer && !isMax && canAfford;
 
     const rowX = x + 12;
@@ -2881,7 +2953,7 @@ function drawTurretUpgradePanel(ctx, geo) {
     const isMax = lvl >= MAX_UPGRADE_LEVEL;
     const cost = isMax ? 0 : upgradeCost(stat, lvl);
     const canAfford = !isMax && state.money >= cost;
-    const isPlayer = side === "player";
+    const isPlayer = side === mySide();
     const enabled = isPlayer && !isMax && canAfford;
 
     const rowX = x + 12;
@@ -3053,7 +3125,7 @@ function formatStatPreview(factory, stat) {
 function drawWallSlots(ctx, side) {
   const state = game[side];
   if (!state || !state.wallSlots) return;
-  const isPlayer = side === "player";
+  const isPlayer = side === mySide();
   const buildMode = game.ui.selectedBuildType === "turret" && isPlayer;
 
   for (let i = 0; i < state.wallSlots.length; i++) {
@@ -3070,8 +3142,8 @@ function drawWallSlots(ctx, side) {
     if (!buildMode) continue;
 
     const hover = game.ui.hoverWallSlot;
-    const isHover = hover && hover.side === "player" && hover.idx === i;
-    const canAfford = game.player.money >= TURRET_TYPE.cost;
+    const isHover = hover && hover.side === mySide() && hover.idx === i;
+    const canAfford = game[mySide()].money >= TURRET_TYPE.cost;
 
     // Rect de fond (cyan ou rouge selon affordabilité)
     if (isHover) {
@@ -3433,29 +3505,42 @@ function drawMenu(ctx) {
     ctx.fillText(BIOME_LABELS[key], rect.x + rect.w / 2, rect.y + 42);
   }
 
-  // ── BOUTON JOUER ──
-  const playW = 280, playH = 60;
-  const playRect = { x: cx - playW / 2, y: 432, w: playW, h: playH };
-  const playHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, playRect);
+  // ── BOUTONS JOUER (Solo / Multijoueur) ──
+  const playH = 60;
+  const playW = 230;
+  const playGap = 18;
+  const playTotalW = 2 * playW + playGap;
+  const playStartX = cx - playTotalW / 2;
+  const playY = 432;
+  const playRect = { x: playStartX, y: playY, w: playW, h: playH };
+  const playMpRect = { x: playStartX + playW + playGap, y: playY, w: playW, h: playH };
 
-  ctx.fillStyle = playHover ? COLORS.player : COLORS.playerDark;
-  roundedRect(ctx, playRect.x, playRect.y, playRect.w, playRect.h, 12);
-  ctx.fill();
-  ctx.strokeStyle = COLORS.player;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  if (playHover) {
-    ctx.shadowColor = COLORS.player;
-    ctx.shadowBlur = 16;
+  function drawPlayBtn(rect, label, sub, baseColor, baseColorDark) {
+    const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+    ctx.fillStyle = hover ? baseColor : baseColorDark;
+    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 12);
+    ctx.fill();
+    ctx.strokeStyle = baseColor;
+    ctx.lineWidth = 2;
     ctx.stroke();
-    ctx.shadowBlur = 0;
+    if (hover) {
+      ctx.shadowColor = baseColor;
+      ctx.shadowBlur = 16;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 22px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2 - 8);
+    ctx.font = "11px -apple-system, sans-serif";
+    ctx.fillStyle = "rgba(255,255,255,0.78)";
+    ctx.fillText(sub, rect.x + rect.w / 2, rect.y + rect.h / 2 + 14);
   }
 
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 26px -apple-system, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("▶  JOUER", playRect.x + playRect.w / 2, playRect.y + playRect.h / 2);
+  drawPlayBtn(playRect, "▶  SOLO", "Joue contre un bot", COLORS.player, COLORS.playerDark);
+  drawPlayBtn(playMpRect, "👥  MULTIJOUEUR", "Affronte un autre joueur", COLORS.enemy, COLORS.enemyDark || "rgba(220,38,38,0.4)");
 
   // ── SETTINGS AUDIO ──
   ctx.fillStyle = COLORS.hudText;
@@ -3537,7 +3622,7 @@ function drawMenu(ctx) {
   ctx.textBaseline = "alphabetic";
   ctx.fillText("github.com/GuestElite/robotic-emergence", cx, CONFIG.H - 12);
 
-  game.ui.menuRects = { diff: diffRects, biome: biomeRects, play: playRect, music: musicRect, sfx: sfxRect, links: linkRects };
+  game.ui.menuRects = { diff: diffRects, biome: biomeRects, play: playRect, playMp: playMpRect, music: musicRect, sfx: sfxRect, links: linkRects };
 }
 
 function drawToggleButton(ctx, rect, label, on) {
@@ -3584,11 +3669,14 @@ function drawGameOverOverlay(ctx) {
   ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
   ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
 
-  const win = game.gameOver.winner === "player";
+  const win = game.gameOver.winner === mySide();
   const title = win ? "VICTOIRE !" : "DÉFAITE";
   let subtitle = win
-    ? "La base ennemie est tombée."
+    ? "La base adverse est tombée."
     : "Ta base a été détruite.";
+  if (game.gameOver.reason === "opponent_left") {
+    subtitle = "L'adversaire a quitté la partie.";
+  }
   // Récompense Supabase si dispo
   if (game.gameOver.reward != null) {
     subtitle += `  · +${game.gameOver.reward} 💰 ajoutés à ton solde`;
@@ -3609,26 +3697,32 @@ function drawGameOverOverlay(ctx) {
   // Rapport de partie
   drawGameOverReport(ctx);
 
-  // Bouton "Rejouer"
+  // Bouton "Rejouer" (masqué en multijoueur)
+  const isMp = game.mode === "mp";
   const btnW = 180;
   const btnH = 52;
   const gap = 16;
-  const totalW = btnW * 2 + gap;
+  const totalW = isMp ? btnW : btnW * 2 + gap;
   const startX = (CONFIG.CANVAS_W - totalW) / 2;
   const btnY = CONFIG.H - 90;
-  game.ui.replayBtn = { x: startX, y: btnY, w: btnW, h: btnH };
-  game.ui.gameOverMenuBtn = { x: startX + btnW + gap, y: btnY, w: btnW, h: btnH };
+  if (isMp) {
+    game.ui.replayBtn = null;
+    game.ui.gameOverMenuBtn = { x: startX, y: btnY, w: btnW, h: btnH };
+  } else {
+    game.ui.replayBtn = { x: startX, y: btnY, w: btnW, h: btnH };
+    game.ui.gameOverMenuBtn = { x: startX + btnW + gap, y: btnY, w: btnW, h: btnH };
 
-  const replayHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.replayBtn);
-  ctx.fillStyle = replayHover ? COLORS.player : COLORS.playerDark;
-  roundedRect(ctx, game.ui.replayBtn.x, game.ui.replayBtn.y, btnW, btnH, 10);
-  ctx.fill();
-  ctx.strokeStyle = COLORS.player;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 18px -apple-system, sans-serif";
-  ctx.fillText("↻ Rejouer", game.ui.replayBtn.x + btnW / 2, btnY + btnH / 2);
+    const replayHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.replayBtn);
+    ctx.fillStyle = replayHover ? COLORS.player : COLORS.playerDark;
+    roundedRect(ctx, game.ui.replayBtn.x, game.ui.replayBtn.y, btnW, btnH, 10);
+    ctx.fill();
+    ctx.strokeStyle = COLORS.player;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 18px -apple-system, sans-serif";
+    ctx.fillText("↻ Rejouer", game.ui.replayBtn.x + btnW / 2, btnY + btnH / 2);
+  }
 
   const menuHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.gameOverMenuBtn);
   ctx.fillStyle = menuHover ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
@@ -3736,20 +3830,22 @@ function drawHUD(ctx) {
   ctx.lineTo(CONFIG.CANVAS_W, CONFIG.HUD_H);
   ctx.stroke();
 
-  // Argent joueur (gauche)
-  ctx.fillStyle = COLORS.player;
+  // Argent du joueur courant (toujours à gauche, peu importe MP host/guest)
+  const mineForHud = mySide();
+  const oppForHud = oppSide();
+  ctx.fillStyle = mineForHud === "player" ? COLORS.player : COLORS.enemy;
   ctx.font = "bold 20px -apple-system, sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  // Solde de partie (in-game money pour construire)
-  ctx.fillText(`💰 ${game.player.money}`, 20, CONFIG.HUD_H / 2 - 8);
+  ctx.fillText(`💰 ${game[mineForHud].money}`, 20, CONFIG.HUD_H / 2 - 8);
 
   // Solde global (currency Supabase) + username sous le solde de partie
   const profile = window.RE_AUTH?.profile;
   ctx.font = "10px -apple-system, sans-serif";
   ctx.fillStyle = COLORS.hudMuted;
   if (profile) {
-    ctx.fillText(`👤 ${profile.username || "joueur"} · 💰 ${profile.currency} global`, 20, CONFIG.HUD_H / 2 + 10);
+    const mpTag = (game.mode === "mp" && game.mp?.role) ? ` · ${game.mp.role === "host" ? "Hôte" : "Invité"}` : "";
+    ctx.fillText(`👤 ${profile.username || "joueur"} · 💰 ${profile.currency} global${mpTag}`, 20, CONFIG.HUD_H / 2 + 10);
   } else {
     ctx.fillText("invité — connecte-toi pour gagner", 20, CONFIG.HUD_H / 2 + 10);
   }
@@ -3759,10 +3855,15 @@ function drawHUD(ctx) {
   drawLightningButton(ctx);
   drawSettingsButton(ctx);
 
-  // Argent ennemi (droite)
-  ctx.fillStyle = COLORS.enemy;
+  // Argent de l'adversaire (droite). En MP on ajoute son pseudo.
+  ctx.fillStyle = oppForHud === "player" ? COLORS.player : COLORS.enemy;
   ctx.textAlign = "right";
-  ctx.fillText(`${game.enemy.money} 💰`, CONFIG.CANVAS_W - 20, CONFIG.HUD_H / 2);
+  ctx.fillText(`${game[oppForHud].money} 💰`, CONFIG.CANVAS_W - 20, CONFIG.HUD_H / 2 - 8);
+  if (game.mode === "mp" && game.mp?.opponent?.username) {
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.font = "10px -apple-system, sans-serif";
+    ctx.fillText(`👤 ${game.mp.opponent.username}`, CONFIG.CANVAS_W - 20, CONFIG.HUD_H / 2 + 10);
+  }
 
   // Timer (sous le centre du HUD)
   ctx.fillStyle = COLORS.hudText;
@@ -3803,7 +3904,7 @@ function drawBuildButtons(ctx) {
     const icon = ICONS[btn.type] || "🏭";
 
     const isActive = game.ui.selectedBuildType === btn.type;
-    const canAfford = game.player.money >= cost;
+    const canAfford = game[mySide()].money >= cost;
     const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, btn);
 
     let fill;
@@ -4030,7 +4131,8 @@ function drawLightningButton(ctx) {
   const btnY = 12;
   game.ui.lightningBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
 
-  const ready = game.lightningCooldown <= 0;
+  const myCd = lightningCdFor(mySide());
+  const ready = myCd <= 0;
   const aiming = game.lightningAiming;
   const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.lightningBtn);
 
@@ -4066,12 +4168,12 @@ function drawLightningButton(ctx) {
   } else if (ready) {
     ctx.fillText("⚡ Éclair", btnX + btnW / 2, btnY + btnH / 2);
   } else {
-    ctx.fillText(`⚡ ${Math.ceil(game.lightningCooldown)}s`, btnX + btnW / 2, btnY + btnH / 2);
+    ctx.fillText(`⚡ ${Math.ceil(myCd)}s`, btnX + btnW / 2, btnY + btnH / 2);
   }
 
   // Barre de progression du cooldown (en bas du bouton)
   if (!ready) {
-    const ratio = 1 - game.lightningCooldown / LIGHTNING_COOLDOWN_SEC;
+    const ratio = 1 - myCd / LIGHTNING_COOLDOWN_SEC;
     ctx.fillStyle = "rgba(0,0,0,0.5)";
     ctx.fillRect(btnX + 2, btnY + btnH - 4, btnW - 4, 2);
     ctx.fillStyle = "#fbbf24";
@@ -4168,23 +4270,25 @@ function setupInput(canvas) {
       return;
     }
 
-    // Hover slots sur les 2 sides (le panneau lecture seule fonctionne aussi pour l'ennemi)
-    let idx = findSlotAt("player", wx, wy);
+    // Hover slots sur les 2 sides (le panneau lecture seule fonctionne aussi pour l'adversaire)
+    const meHov = mySide();
+    const oppHov = oppSide();
+    let idx = findSlotAt(meHov, wx, wy);
     if (idx >= 0) {
-      game.ui.hoverSlot = { side: "player", slotIndex: idx };
+      game.ui.hoverSlot = { side: meHov, slotIndex: idx };
     } else {
-      idx = findSlotAt("enemy", wx, wy);
-      game.ui.hoverSlot = idx >= 0 ? { side: "enemy", slotIndex: idx } : null;
+      idx = findSlotAt(oppHov, wx, wy);
+      game.ui.hoverSlot = idx >= 0 ? { side: oppHov, slotIndex: idx } : null;
     }
 
-    // Hover wall slot (côté joueur uniquement, pour placement turret)
+    // Hover wall slot (côté joueur courant uniquement, pour placement turret)
     game.ui.hoverWallSlot = null;
     if (game.ui.selectedBuildType === "turret") {
-      const wallSlots = game.player.wallSlots || [];
+      const wallSlots = game[meHov].wallSlots || [];
       for (let i = 0; i < wallSlots.length; i++) {
         const s = wallSlots[i];
         if (wx >= s.x && wx <= s.x + s.w && wy >= s.y && wy <= s.y + s.h) {
-          game.ui.hoverWallSlot = { side: "player", idx: i };
+          game.ui.hoverWallSlot = { side: meHov, idx: i };
           break;
         }
       }
@@ -4251,10 +4355,28 @@ function setupInput(canvas) {
           }
         }
       }
-      // Play
+      // Play SOLO
       if (pointInRect(sx, sy, mr.play)) {
         audio.playSFX("click");
         startGame(game.difficulty);
+        return;
+      }
+      // Play MULTIJOUEUR
+      if (mr.playMp && pointInRect(sx, sy, mr.playMp)) {
+        audio.playSFX("click");
+        startMultiplayer();
+        return;
+      }
+      return;
+    }
+
+    // Salle d'attente / lobby
+    if (game.screen === "lobby") {
+      const lr = game.ui.lobbyRects;
+      if (!lr) return;
+      if (lr.cancel && pointInRect(sx, sy, lr.cancel)) {
+        audio.playSFX("click");
+        cancelMultiplayer();
         return;
       }
       return;
@@ -4283,30 +4405,45 @@ function setupInput(canvas) {
         game.ui.upgradePanel = null;
         return;
       }
-      if (sel.side === "player" && pr.sell && pointInRect(sx, sy, pr.sell)) {
-        const refund = isTurretPanel
-          ? sellTurret("player", sel.index)
-          : sellFactory("player", sel.slotIndex);
-        if (refund !== false) game.ui.upgradePanel = null;
+      const mineSide = mySide();
+      const isGuestMp = game.mode === "mp" && game.mp?.role === "guest";
+      if (sel.side === mineSide && pr.sell && pointInRect(sx, sy, pr.sell)) {
+        if (isGuestMp) {
+          if (isTurretPanel) window.RE_MP.sendInput({ type: "sell_turret", wallSlotIndex: sel.index });
+          else window.RE_MP.sendInput({ type: "sell_factory", slotIndex: sel.slotIndex });
+          audio.playSFX("sell");
+          game.ui.upgradePanel = null;
+        } else {
+          const refund = isTurretPanel
+            ? sellTurret(mineSide, sel.index)
+            : sellFactory(mineSide, sel.slotIndex);
+          if (refund !== false) game.ui.upgradePanel = null;
+        }
         return;
       }
-      if (sel.side === "player" && pr.upgrades) {
+      if (sel.side === mineSide && pr.upgrades) {
         for (const u of pr.upgrades) {
           if (pointInRect(sx, sy, u.rect)) {
-            if (isTurretPanel) tryUpgradeTurret("player", sel.index, u.statId);
-            else tryUpgradeFactory("player", sel.slotIndex, u.statId);
+            if (isGuestMp) {
+              if (isTurretPanel) window.RE_MP.sendInput({ type: "upgrade_turret", wallSlotIndex: sel.index, statId: u.statId });
+              else window.RE_MP.sendInput({ type: "upgrade_factory", slotIndex: sel.slotIndex, statId: u.statId });
+              audio.playSFX("upgrade");
+            } else {
+              if (isTurretPanel) tryUpgradeTurret(mineSide, sel.index, u.statId);
+              else tryUpgradeFactory(mineSide, sel.slotIndex, u.statId);
+            }
             return;
           }
         }
       }
-      if (!isTurretPanel && sel.side === "player" && pr.mode) {
+      if (!isTurretPanel && sel.side === mineSide && pr.mode) {
         if (pr.mode.attack && pointInRect(sx, sy, pr.mode.attack)) {
-          const slot = game.player.slots[sel.slotIndex];
+          const slot = game[mineSide].slots[sel.slotIndex];
           if (slot?.factory) slot.factory.mode = "attack";
           return;
         }
         if (pr.mode.defense && pointInRect(sx, sy, pr.mode.defense)) {
-          const slot = game.player.slots[sel.slotIndex];
+          const slot = game[mineSide].slots[sel.slotIndex];
           if (slot?.factory) slot.factory.mode = "defense";
           return;
         }
@@ -4372,7 +4509,13 @@ function setupInput(canvas) {
     // 1bis) Pendant le mode visée : clic sur la map = tir, clic ailleurs = annule
     if (game.lightningAiming) {
       if (sy >= CONFIG.HUD_H) {
-        fireLightningAt(wx);
+        if (game.mode === "mp" && game.mp?.role === "guest") {
+          window.RE_MP.sendInput({ type: "lightning_fire", x: wx });
+          // Côté guest, on a "consommé" l'aim — le host appliquera. On présume succès pour l'UX.
+          game.lightningAiming = false;
+        } else {
+          fireLightningAt(wx, mySide());
+        }
       } else {
         game.lightningAiming = false;
       }
@@ -4389,21 +4532,29 @@ function setupInput(canvas) {
       }
     }
 
-    // 3) Wall slot du joueur — placement de turret OU ouverture du panneau si déjà construite
+    const me = mySide();
+    const opp = oppSide();
+    const isGuest = game.mode === "mp" && game.mp?.role === "guest";
+
+    // 3) Wall slot du joueur courant — placement de turret OU ouverture du panneau si déjà construite
     {
-      const wallSlots = game.player.wallSlots || [];
+      const wallSlots = game[me].wallSlots || [];
       for (let i = 0; i < wallSlots.length; i++) {
         const s = wallSlots[i];
         if (wx >= s.x && wx <= s.x + s.w && wy >= s.y && wy <= s.y + s.h) {
           if (s.turret) {
-            // Turret existante → panneau d'upgrade
-            game.ui.upgradePanel = { side: "player", type: "turret", index: i };
+            game.ui.upgradePanel = { side: me, type: "turret", index: i };
             game.ui.selectedBuildType = null;
             return;
           }
           if (game.ui.selectedBuildType === "turret") {
-            if (tryPlaceTurret("player", i)) {
-              if (game.player.money < TURRET_TYPE.cost) game.ui.selectedBuildType = null;
+            if (isGuest) {
+              window.RE_MP.sendInput({ type: "build_turret", wallSlotIndex: i });
+              audio.playSFX("place");
+            } else {
+              if (tryPlaceTurret(me, i)) {
+                if (game[me].money < TURRET_TYPE.cost) game.ui.selectedBuildType = null;
+              }
             }
             return;
           }
@@ -4411,46 +4562,50 @@ function setupInput(canvas) {
       }
     }
 
-    // 3bis) Wall slot ennemi avec turret → panneau lecture seule
+    // 3bis) Wall slot adverse avec turret → panneau lecture seule
     {
-      const wallSlots = game.enemy.wallSlots || [];
+      const wallSlots = game[opp].wallSlots || [];
       for (let i = 0; i < wallSlots.length; i++) {
         const s = wallSlots[i];
         if (s.turret && wx >= s.x && wx <= s.x + s.w && wy >= s.y && wy <= s.y + s.h) {
-          game.ui.upgradePanel = { side: "enemy", type: "turret", index: i };
+          game.ui.upgradePanel = { side: opp, type: "turret", index: i };
           return;
         }
       }
     }
 
-    // 4) Click sur un slot joueur (coords MONDE) ?
-    const playerSlotIdx = findSlotAt("player", wx, wy);
-    if (playerSlotIdx >= 0) {
-      const slot = game.player.slots[playerSlotIdx];
-      // 2a) Mode build factory actif (turret est posé sur le rempart, géré plus haut)
+    // 4) Click sur un slot du joueur courant (coords MONDE)
+    const mySlotIdx = findSlotAt(me, wx, wy);
+    if (mySlotIdx >= 0) {
+      const slot = game[me].slots[mySlotIdx];
       if (game.ui.selectedBuildType && FACTORY_TYPES[game.ui.selectedBuildType]
           && !slot.factory && !slot.isPath) {
-        const placed = tryPlaceFactory("player", playerSlotIdx, game.ui.selectedBuildType);
-        if (placed) {
-          const type = FACTORY_TYPES[game.ui.selectedBuildType];
-          if (game.player.money < type.cost) game.ui.selectedBuildType = null;
+        if (isGuest) {
+          window.RE_MP.sendInput({ type: "build_factory", slotIndex: mySlotIdx, typeId: game.ui.selectedBuildType });
+          audio.playSFX("place");
+          // On présume succès côté UX, l'auto-reset du selected sera repris quand snap reviendra
+        } else {
+          const placed = tryPlaceFactory(me, mySlotIdx, game.ui.selectedBuildType);
+          if (placed) {
+            const type = FACTORY_TYPES[game.ui.selectedBuildType];
+            if (game[me].money < type.cost) game.ui.selectedBuildType = null;
+          }
         }
         return;
       }
-      // 2b) Factory existante → ouvrir panneau d'upgrade
       if (slot.factory) {
-        game.ui.upgradePanel = { side: "player", type: "factory", slotIndex: playerSlotIdx };
-        game.ui.selectedBuildType = null; // évite de placer accidentellement
+        game.ui.upgradePanel = { side: me, type: "factory", slotIndex: mySlotIdx };
+        game.ui.selectedBuildType = null;
         return;
       }
     }
 
-    // 3) Click sur une factory ennemie ? (lecture seule, coords MONDE)
-    const enemySlotIdx = findSlotAt("enemy", wx, wy);
-    if (enemySlotIdx >= 0) {
-      const slot = game.enemy.slots[enemySlotIdx];
+    // 5) Click sur une factory adverse → lecture seule
+    const oppSlotIdx = findSlotAt(opp, wx, wy);
+    if (oppSlotIdx >= 0) {
+      const slot = game[opp].slots[oppSlotIdx];
       if (slot.factory) {
-        game.ui.upgradePanel = { side: "enemy", type: "factory", slotIndex: enemySlotIdx };
+        game.ui.upgradePanel = { side: opp, type: "factory", slotIndex: oppSlotIdx };
         return;
       }
     }
@@ -4464,8 +4619,12 @@ function setupInput(canvas) {
       }
       return;
     }
+    if (game.screen === "lobby") {
+      if (evt.key === "Escape") cancelMultiplayer();
+      return;
+    }
     if (game.gameOver) {
-      if (evt.key === "Enter" || evt.key === " ") startGame(game.difficulty);
+      if ((evt.key === "Enter" || evt.key === " ") && game.mode !== "mp") startGame(game.difficulty);
       if (evt.key === "Escape" || evt.key === "m") goToMenu();
       return;
     }
@@ -4526,6 +4685,10 @@ function resetGame() {
   game.explosions = [];
   game.lightning = null;
   game.lightningCooldown = 0;
+  if (game.mp) {
+    game.mp.enemyLightningCooldown = 0;
+    game.mp.snapAccum = 0;
+  }
   game.stats = { player: makeStats(), enemy: makeStats() };
   game.gameOver = null;
   game.camera.x = 0;
@@ -4545,6 +4708,12 @@ function startGame(difficulty) {
     game.difficulty = difficulty;
     game.preset = DIFFICULTY_PRESETS[difficulty];
   }
+  // Solo : on s'assure de quitter un éventuel canal multijoueur résiduel.
+  if (game.mp && window.RE_MP) {
+    try { window.RE_MP.leave(); } catch {}
+    game.mp = null;
+  }
+  game.mode = "solo";
   applyTeamSkin(); // applique le skin courant aux COLORS.player avant resetGame
   resetGame();
   game.screen = "playing";
@@ -4556,6 +4725,407 @@ function goToMenu() {
   game.screen = "menu";
   game.gameOver = null;
   audio.stopMusic();
+  // Si on revient au menu depuis un lobby/partie multi, on quitte proprement le canal
+  if (game.mp && window.RE_MP) {
+    try { window.RE_MP.leave(); } catch {}
+    game.mp = null;
+  }
+  game.mode = "solo";
+}
+
+// -------------------------------------------------------------
+// Multijoueur — orchestration côté client (lobby + sync via Realtime)
+// -------------------------------------------------------------
+
+async function startMultiplayer() {
+  if (!window.RE_MP) {
+    flashLobbyMessage("Multijoueur indisponible — recharge la page.", "error");
+    return;
+  }
+  // Authentification requise pour rejoindre un lobby
+  const profile = window.RE_AUTH?.profile;
+  if (!profile) {
+    window.location.href = "/auth/login.html?next=/prototype/";
+    return;
+  }
+
+  game.mode = "mp";
+  game.mp = {
+    role: null,
+    lobbyId: null,
+    opponent: null,
+    status: "joining",
+    snapAccum: 0,
+    waitingStartedAt: performance.now(),
+  };
+  game.screen = "lobby";
+  game.ui.lobbyMessage = "Recherche d'un adversaire…";
+
+  // Sub aux events Realtime
+  if (!game.mp.subscribed) {
+    window.RE_MP.onInput(handleMpInput);
+    window.RE_MP.onSnapshot(applyMpSnapshot);
+    window.RE_MP.onGameOver(handleMpGameOver);
+    window.RE_MP.onOpponentLeave(handleMpOpponentLeave);
+    window.RE_MP.onPaired(handleMpPaired);
+    game.mp.subscribed = true;
+  }
+
+  const res = await window.RE_MP.joinOrCreate({
+    biome: game.biome,
+    difficulty: game.difficulty,
+  });
+  if (res?.error) {
+    flashLobbyMessage(`Erreur : ${res.error}`, "error");
+    game.mode = "solo";
+    game.mp = null;
+    setTimeout(() => { if (game.screen === "lobby") game.screen = "menu"; }, 1500);
+    return;
+  }
+
+  game.mp.role = res.role;
+  game.mp.lobbyId = res.lobbyId;
+  game.mp.opponent = res.opponent;
+  game.mp.seed = res.seed;
+  game.biome = res.biome || game.biome;
+  game.difficulty = res.difficulty || game.difficulty;
+  if (DIFFICULTY_PRESETS[game.difficulty]) {
+    game.preset = DIFFICULTY_PRESETS[game.difficulty];
+  }
+
+  if (res.role === "guest") {
+    // On a rejoint un lobby waiting : la partie démarre.
+    game.mp.status = "playing";
+    startMpGame();
+  } else {
+    // Host : on attend qu'un guest rejoigne
+    game.mp.status = "waiting";
+    game.ui.lobbyMessage = "En attente d'un adversaire…";
+  }
+}
+
+function handleMpPaired({ opponent, biome, difficulty }) {
+  if (!game.mp) return;
+  game.mp.opponent = opponent;
+  game.mp.status = "playing";
+  if (biome) game.biome = biome;
+  if (difficulty) {
+    game.difficulty = difficulty;
+    if (DIFFICULTY_PRESETS[difficulty]) game.preset = DIFFICULTY_PRESETS[difficulty];
+  }
+  startMpGame();
+}
+
+function startMpGame() {
+  applyTeamSkin();
+  resetGame();
+  game.screen = "playing";
+  // Le guest se positionne par défaut sur sa base (droite), l'host reste à gauche.
+  if (game.mp?.role === "guest") {
+    const maxScroll = Math.max(0, CONFIG.W - CONFIG.CANVAS_W);
+    game.camera.x = maxScroll;
+  }
+  audio.startMusic();
+}
+
+async function cancelMultiplayer() {
+  if (window.RE_MP) {
+    try { await window.RE_MP.leave(); } catch {}
+  }
+  game.mp = null;
+  game.mode = "solo";
+  game.screen = "menu";
+}
+
+function flashLobbyMessage(msg, level = "info") {
+  game.ui.lobbyMessage = msg;
+  game.ui.lobbyMessageLevel = level;
+}
+
+function drawLobbyScreen(ctx) {
+  // Fond
+  const grad = ctx.createLinearGradient(0, 0, 0, CONFIG.H);
+  grad.addColorStop(0, "#0a0e1a");
+  grad.addColorStop(1, "#1a2030");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+
+  const cx = CONFIG.CANVAS_W / 2;
+
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 44px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = COLORS.enemy;
+  ctx.shadowBlur = 18;
+  ctx.fillText("👥 SALLE D'ATTENTE", cx, 180);
+  ctx.shadowBlur = 0;
+
+  // Spinner pulsé
+  const t = (performance.now() % 1200) / 1200;
+  const pulse = 0.55 + 0.45 * Math.sin(t * Math.PI * 2);
+  ctx.fillStyle = `rgba(239, 68, 68, ${pulse.toFixed(3)})`;
+  ctx.beginPath();
+  ctx.arc(cx, 270, 16, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Message principal
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "20px -apple-system, sans-serif";
+  ctx.fillText(game.ui.lobbyMessage || "Connexion…", cx, 320);
+
+  // Infos lobby
+  ctx.font = "13px -apple-system, sans-serif";
+  ctx.fillStyle = COLORS.hudMuted;
+  if (game.mp?.role && game.mp?.lobbyId) {
+    const rolePretty = game.mp.role === "host" ? "Hôte (tu seras à gauche, équipe bleue)" : "Invité (tu seras à droite, équipe rouge)";
+    ctx.fillText(rolePretty, cx, 354);
+    ctx.fillText(`Biome : ${BIOME_LABELS[game.biome] || game.biome}  ·  Difficulté : ${DIFFICULTY_PRESETS[game.difficulty]?.label || game.difficulty}`, cx, 376);
+    ctx.fillText(`Salon : ${game.mp.lobbyId.slice(0, 8)}`, cx, 396);
+  }
+  if (game.mp?.opponent?.username) {
+    ctx.fillStyle = COLORS.hpGood;
+    ctx.font = "bold 16px -apple-system, sans-serif";
+    ctx.fillText(`Adversaire : ${game.mp.opponent.username}`, cx, 426);
+  }
+
+  // Bouton annuler
+  const cancelW = 200, cancelH = 50;
+  const cancelRect = { x: cx - cancelW / 2, y: 500, w: cancelW, h: cancelH };
+  const cancelHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, cancelRect);
+  ctx.fillStyle = cancelHover ? "rgba(239,68,68,0.45)" : "rgba(239,68,68,0.22)";
+  roundedRect(ctx, cancelRect.x, cancelRect.y, cancelRect.w, cancelRect.h, 10);
+  ctx.fill();
+  ctx.strokeStyle = COLORS.enemy;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 16px -apple-system, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText("↩  Annuler", cancelRect.x + cancelRect.w / 2, cancelRect.y + cancelRect.h / 2);
+
+  // Footer
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "11px -apple-system, sans-serif";
+  ctx.fillText("La partie démarre dès qu'un autre joueur rejoint le salon.", cx, CONFIG.H - 40);
+
+  game.ui.lobbyRects = { cancel: cancelRect };
+}
+
+// Sérialise l'état partagé en multijoueur. Le host appelle ça à ~12 Hz.
+function serializeSide(side) {
+  const s = game[side];
+  if (!s) return null;
+  return {
+    money: s.money,
+    baseHP: s.baseHP,
+    baseHPMax: s.baseHPMax,
+    slots: s.slots.map((slot) => {
+      if (!slot.factory) return null;
+      const f = slot.factory;
+      return { typeId: f.typeId, hp: f.hp, level: f.level, upgrades: { ...f.upgrades }, totalInvested: f.totalInvested, mode: f.mode };
+    }),
+    wallTurrets: s.wallSlots.map((w) => {
+      if (!w.turret) return null;
+      const t = w.turret;
+      return { hp: t.hp, maxHp: t.maxHp, upgrades: { ...t.upgrades }, totalInvested: t.totalInvested, stats: { ...t.stats } };
+    }),
+  };
+}
+
+function buildMpSnapshot() {
+  return {
+    t: game.time,
+    player: serializeSide("player"),
+    enemy: serializeSide("enemy"),
+    units: game.units
+      .filter((u) => u.hp > 0 && !u.stationary)
+      .map((u) => ({
+        side: u.side,
+        typeId: u.typeId,
+        x: u.x,
+        y: u.y,
+        hp: u.hp,
+        maxHp: u.maxHp,
+      })),
+    attackFx: game.attackFx.slice(-40).map((fx) => ({ ...fx })),
+    explosions: game.explosions.slice(-12).map((ex) => ({ ...ex })),
+    lightning: game.lightning ? { ...game.lightning, segments: game.lightning.segments?.slice() || [] } : null,
+    cd: { player: game.lightningCooldown, enemy: game.mp?.enemyLightningCooldown || 0 },
+    gameOver: game.gameOver ? { winner: game.gameOver.winner } : null,
+  };
+}
+
+// Recompose une side state à partir d'un snapshot reçu (côté guest uniquement).
+function applySerializedSide(side, ser) {
+  if (!ser) return;
+  const local = game[side];
+  if (!local) return;
+  local.money = ser.money;
+  local.baseHP = ser.baseHP;
+  local.baseHPMax = ser.baseHPMax;
+  if (Array.isArray(ser.slots)) {
+    for (let i = 0; i < ser.slots.length && i < local.slots.length; i++) {
+      const inc = ser.slots[i];
+      const slot = local.slots[i];
+      if (!inc) { slot.factory = null; continue; }
+      const baseType = FACTORY_TYPES[inc.typeId];
+      if (!baseType) continue;
+      if (!slot.factory) {
+        slot.factory = {
+          typeId: inc.typeId, side, hp: inc.hp, prodTimer: 0,
+          level: inc.level || 1, upgrades: inc.upgrades || defaultUpgrades(),
+          totalInvested: inc.totalInvested || baseType.cost,
+          mode: inc.mode || "attack",
+        };
+      } else {
+        slot.factory.typeId = inc.typeId;
+        slot.factory.hp = inc.hp;
+        slot.factory.level = inc.level || 1;
+        slot.factory.upgrades = inc.upgrades || defaultUpgrades();
+        slot.factory.totalInvested = inc.totalInvested || slot.factory.totalInvested;
+        slot.factory.mode = inc.mode || slot.factory.mode;
+      }
+    }
+  }
+  if (Array.isArray(ser.wallTurrets)) {
+    for (let i = 0; i < ser.wallTurrets.length && i < local.wallSlots.length; i++) {
+      const inc = ser.wallTurrets[i];
+      const wall = local.wallSlots[i];
+      if (!inc) {
+        if (wall.turret) wall.turret.hp = 0;
+        wall.turret = null;
+        continue;
+      }
+      if (!wall.turret) {
+        const turret = {
+          side, typeId: "turret", kind: "turret", stationary: true,
+          x: wall.x + wall.w / 2, y: wall.y + wall.h / 2,
+          hp: inc.hp, maxHp: inc.maxHp, stats: { ...inc.stats },
+          target: null, attackCooldown: 0, wanderY: null, wanderTimer: 0,
+          mode: "defense", exitWaypoints: [], wallSlotRef: wall,
+          totalInvested: inc.totalInvested,
+          upgrades: { ...inc.upgrades },
+        };
+        game.units.push(turret);
+        wall.turret = turret;
+      } else {
+        wall.turret.hp = inc.hp;
+        wall.turret.maxHp = inc.maxHp;
+        wall.turret.stats = { ...inc.stats };
+        wall.turret.upgrades = { ...inc.upgrades };
+        wall.turret.totalInvested = inc.totalInvested;
+      }
+    }
+  }
+}
+
+function applyMpSnapshot(snap) {
+  if (!snap || game.mode !== "mp" || game.mp?.role !== "guest") return;
+  if (game.screen !== "playing") {
+    // Le host a démarré la partie avant que le guest n'ait fini son setup local
+    startMpGame();
+  }
+  game.time = snap.t;
+  applySerializedSide("player", snap.player);
+  applySerializedSide("enemy", snap.enemy);
+
+  // Rebuild des units mobiles : on retire celles non-stationnaires et on les recrée
+  game.units = game.units.filter((u) => u.stationary && u.hp > 0);
+  if (Array.isArray(snap.units)) {
+    for (const u of snap.units) {
+      const factoryDef = FACTORY_TYPES[u.typeId];
+      const unitDef = UNIT_TYPES[factoryDef?.unitType] || UNIT_TYPES[u.typeId];
+      if (!unitDef) continue;
+      game.units.push({
+        side: u.side,
+        typeId: u.typeId,
+        kind: "unit",
+        x: u.x,
+        y: u.y,
+        hp: u.hp,
+        maxHp: u.maxHp,
+        stats: { ...unitDef },
+        target: null,
+        attackCooldown: 0,
+        wanderY: null,
+        wanderTimer: 0,
+        mode: "attack",
+        exitWaypoints: [],
+        stationary: false,
+      });
+    }
+  }
+  game.attackFx = Array.isArray(snap.attackFx) ? snap.attackFx.map((fx) => ({ ...fx })) : [];
+  game.explosions = Array.isArray(snap.explosions) ? snap.explosions.map((ex) => ({ ...ex })) : [];
+  game.lightning = snap.lightning ? { ...snap.lightning } : null;
+  if (snap.cd) {
+    // Sur le guest, "ma" lightning cd est celle de mon côté
+    game.lightningCooldown = snap.cd[mySide()] ?? 0;
+  }
+  if (snap.gameOver && !game.gameOver) {
+    handleMpGameOver({ winnerSide: snap.gameOver.winner });
+  }
+}
+
+// Côté host : applique un input reçu du guest (= actions sur le côté enemy).
+function handleMpInput(input) {
+  if (!input || game.mode !== "mp") return;
+  // Le host est seul à traiter les inputs (le guest n'a pas de simulation locale).
+  if (game.mp?.role !== "host") return;
+  if (game.screen !== "playing") return;
+  if (game.gameOver) return;
+  const side = "enemy"; // le guest ne peut piloter que son côté
+
+  switch (input.type) {
+    case "build_factory":
+      tryPlaceFactory(side, input.slotIndex, input.typeId);
+      break;
+    case "upgrade_factory":
+      tryUpgradeFactory(side, input.slotIndex, input.statId);
+      break;
+    case "sell_factory":
+      sellFactory(side, input.slotIndex);
+      break;
+    case "build_turret":
+      tryPlaceTurret(side, input.wallSlotIndex);
+      break;
+    case "upgrade_turret":
+      tryUpgradeTurret(side, input.wallSlotIndex, input.statId);
+      break;
+    case "sell_turret":
+      sellTurret(side, input.wallSlotIndex);
+      break;
+    case "lightning_fire":
+      fireLightningAt(input.x, side);
+      break;
+    default:
+      console.warn("[MP] input inconnu:", input);
+  }
+}
+
+function handleMpGameOver({ winnerSide }) {
+  if (game.gameOver) return;
+  // winnerSide est en perspective host : "player" ou "enemy"
+  game.gameOver = { winner: winnerSide || "player", at: performance.now() };
+  audio.stopMusic();
+  if (window.RE_MP && game.mp?.role === "host") {
+    const mappedWinner = winnerSide === "player" ? "host" : "guest";
+    try { window.RE_MP.sendGameOver(winnerSide); } catch {}
+    try { window.RE_MP.reportFinish(mappedWinner); } catch {}
+  }
+}
+
+function handleMpOpponentLeave() {
+  if (game.gameOver) return;
+  if (game.screen === "playing") {
+    // Adversaire parti pendant la partie → victoire par forfait pour celui qui reste
+    const myWinner = mySide();
+    game.gameOver = { winner: myWinner, at: performance.now(), reason: "opponent_left" };
+    audio.stopMusic();
+  } else if (game.screen === "lobby") {
+    flashLobbyMessage("L'adversaire a quitté avant le début de la partie.", "warn");
+  }
 }
 
 // -------------------------------------------------------------
