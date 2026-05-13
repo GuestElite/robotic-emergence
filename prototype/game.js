@@ -3139,18 +3139,8 @@ function drawUpgradePanel(ctx) {
   const type = FACTORY_TYPES[factory.typeId];
   const state = game[side];
 
-  // Fond + bordure
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.5)";
-  ctx.shadowBlur = 18;
-  ctx.fillStyle = "rgba(15, 20, 25, 0.97)";
-  roundedRect(ctx, x, y, w, h, 10);
-  ctx.fill();
-  ctx.restore();
-  ctx.strokeStyle = side === "player" ? COLORS.player : COLORS.enemy;
-  ctx.lineWidth = 2;
-  roundedRect(ctx, x, y, w, h, 10);
-  ctx.stroke();
+  // Panneau glassmorphique avec accent du side
+  drawGlass(ctx, x, y, w, h, { radius: 16, tint: "rgba(15, 18, 32, 0.86)", border: hexToRgba(side === "player" ? COLORS.player : COLORS.enemy, 0.55) });
 
   // Header
   let cursorY = y + 14;
@@ -3351,18 +3341,8 @@ function drawTurretUpgradePanel(ctx, geo) {
   const turret = slot.turret;
   const state = game[side];
 
-  // Fond
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.5)";
-  ctx.shadowBlur = 18;
-  ctx.fillStyle = "rgba(15, 20, 25, 0.97)";
-  roundedRect(ctx, x, y, w, h, 10);
-  ctx.fill();
-  ctx.restore();
-  ctx.strokeStyle = side === "player" ? COLORS.player : COLORS.enemy;
-  ctx.lineWidth = 2;
-  roundedRect(ctx, x, y, w, h, 10);
-  ctx.stroke();
+  // Panneau glassmorphique
+  drawGlass(ctx, x, y, w, h, { radius: 16, tint: "rgba(15, 18, 32, 0.86)", border: hexToRgba(side === "player" ? COLORS.player : COLORS.enemy, 0.55) });
 
   // Header
   let cursorY = y + 14;
@@ -3762,13 +3742,8 @@ function drawGameOverReport(ctx) {
   const px = (CONFIG.CANVAS_W - PW) / 2;
   const py = 160;
 
-  // Fond du panneau
-  ctx.fillStyle = "rgba(15, 20, 25, 0.92)";
-  roundedRect(ctx, px, py, PW, PH, 12);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.18)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
+  // Panneau glassmorphique
+  drawGlass(ctx, px, py, PW, PH, { radius: 20, tint: "rgba(15, 18, 32, 0.78)", border: "rgba(255,255,255,0.22)" });
 
   // Header
   ctx.fillStyle = COLORS.hudText;
@@ -3864,50 +3839,157 @@ function drawGameOverReport(ctx) {
 // -------------------------------------------------------------
 // Menu d'accueil
 // -------------------------------------------------------------
-function drawMenu(ctx) {
-  // Fond dégradé
-  const grad = ctx.createLinearGradient(0, 0, 0, CONFIG.H);
-  grad.addColorStop(0, "#0a0e1a");
-  grad.addColorStop(1, "#1a2030");
+// ── Helpers UI Liquid Glass (style iOS/visionOS) ──────────────────────────
+// Dessine un fond ambiant (gradient sombre + nappes lumineuses douces) pour
+// les écrans full-screen (menu, lobby, game over).
+function drawGlassBackground(ctx) {
+  // Base
+  const grad = ctx.createLinearGradient(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+  grad.addColorStop(0, "#07091a");
+  grad.addColorStop(0.35, "#0e1530");
+  grad.addColorStop(0.7, "#1a1b3a");
+  grad.addColorStop(1, "#2a1245");
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
 
-  // Grille de fond (style sci-fi subtil)
-  ctx.strokeStyle = "rgba(59, 130, 246, 0.05)";
-  ctx.lineWidth = 1;
-  for (let x = 0; x < CONFIG.CANVAS_W; x += 40) {
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CONFIG.H); ctx.stroke();
+  // Nappes lumineuses radiales (oscillent légèrement avec le temps)
+  const t = performance.now() / 6000;
+  const blobs = [
+    { x: 0.18 + 0.02 * Math.sin(t),       y: 0.22, r: 0.45, c: "rgba(91, 140, 255, 0.22)" },
+    { x: 0.82 + 0.02 * Math.cos(t * 1.1), y: 0.70, r: 0.50, c: "rgba(192, 132, 252, 0.18)" },
+    { x: 0.40,                            y: 0.95, r: 0.45, c: "rgba(34, 211, 238, 0.14)" },
+  ];
+  for (const b of blobs) {
+    const cx = b.x * CONFIG.CANVAS_W;
+    const cy = b.y * CONFIG.H;
+    const r = b.r * CONFIG.CANVAS_W;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0, b.c);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
   }
-  for (let y = 0; y < CONFIG.H; y += 40) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CONFIG.CANVAS_W, y); ctx.stroke();
-  }
+}
 
+// Carte glassmorphique (approximation : ombre douce, translucent, highlight
+// haut, gradient subtil). Pas de vrai blur — trop coûteux sur canvas — mais
+// l'aspect "frosted" est convaincant en superposition d'un fond gradient.
+function drawGlass(ctx, x, y, w, h, opts = {}) {
+  const radius = opts.radius != null ? opts.radius : 16;
+  const tint = opts.tint || "rgba(255, 255, 255, 0.06)";
+  const borderColor = opts.border || "rgba(255, 255, 255, 0.14)";
+  const shadow = opts.shadow !== false;
+
+  ctx.save();
+  if (shadow) {
+    ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
+    ctx.shadowBlur = 28;
+    ctx.shadowOffsetY = 10;
+  }
+  ctx.fillStyle = tint;
+  roundedRect(ctx, x, y, w, h, radius);
+  ctx.fill();
+  ctx.restore();
+
+  // Gradient vertical doux (highlight haut → ombre bas)
+  ctx.save();
+  roundedRect(ctx, x, y, w, h, radius);
+  ctx.clip();
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, "rgba(255, 255, 255, 0.10)");
+  g.addColorStop(0.35, "rgba(255, 255, 255, 0.02)");
+  g.addColorStop(1, "rgba(0, 0, 0, 0.10)");
+  ctx.fillStyle = g;
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+
+  // Bordure
+  ctx.save();
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 1;
+  roundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
+  ctx.stroke();
+  // Top highlight bright line
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.28)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y + 0.5);
+  ctx.lineTo(x + w - radius, y + 0.5);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Variante "active" — accent coloré (glow lumineux).
+function drawGlassAccent(ctx, x, y, w, h, color, opts = {}) {
+  const radius = opts.radius != null ? opts.radius : 16;
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 28;
+  ctx.shadowOffsetY = 6;
+  ctx.fillStyle = hexToRgba(color, 0.22);
+  roundedRect(ctx, x, y, w, h, radius);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  roundedRect(ctx, x, y, w, h, radius);
+  ctx.clip();
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, hexToRgba(color, 0.35));
+  g.addColorStop(1, hexToRgba(color, 0.10));
+  ctx.fillStyle = g;
+  ctx.fillRect(x, y, w, h);
+  // Highlight haut
+  const hg = ctx.createLinearGradient(0, y, 0, y + h);
+  hg.addColorStop(0, "rgba(255, 255, 255, 0.25)");
+  hg.addColorStop(0.5, "rgba(255, 255, 255, 0)");
+  ctx.fillStyle = hg;
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+
+  ctx.save();
+  ctx.strokeStyle = hexToRgba(color, 0.65);
+  ctx.lineWidth = 1.5;
+  roundedRect(ctx, x + 0.75, y + 0.75, w - 1.5, h - 1.5, radius);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawMenu(ctx) {
+  drawGlassBackground(ctx);
   const cx = CONFIG.CANVAS_W / 2;
 
-  // Titre
-  ctx.fillStyle = COLORS.hudText;
-  ctx.font = "bold 64px -apple-system, sans-serif";
+  // Titre — gradient blanc/bleu façon visionOS
+  ctx.save();
+  const titleGrad = ctx.createLinearGradient(0, 100, 0, 180);
+  titleGrad.addColorStop(0, "#ffffff");
+  titleGrad.addColorStop(1, "#93b4ff");
+  ctx.fillStyle = titleGrad;
+  ctx.font = "bold 64px -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.shadowColor = COLORS.player;
-  ctx.shadowBlur = 24;
+  ctx.shadowColor = "rgba(91, 140, 255, 0.6)";
+  ctx.shadowBlur = 32;
   ctx.fillText("🤖 ÉMERGENCE", cx, 140);
-  ctx.shadowBlur = 0;
+  ctx.restore();
 
-  ctx.fillStyle = COLORS.hudMuted;
-  ctx.font = "16px -apple-system, sans-serif";
-  ctx.fillText("Prototype V0 — lane-based auto-battler", cx, 184);
+  ctx.fillStyle = "rgba(240, 244, 255, 0.55)";
+  ctx.font = "15px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Lane-based auto-battler · PvP en ligne", cx, 184);
 
   // ── DIFFICULTÉ ──
-  ctx.fillStyle = COLORS.hudText;
-  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.fillStyle = "rgba(240, 244, 255, 0.55)";
+  ctx.font = "bold 11px -apple-system, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("DIFFICULTÉ", cx, 230);
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("DIFFICULTÉ", cx, 226);
 
   const diffBtnW = 180, diffBtnH = 72, diffGap = 14;
   const diffTotalW = 3 * diffBtnW + 2 * diffGap;
   const diffStartX = cx - diffTotalW / 2;
-  const diffY = 250;
+  const diffY = 240;
   const diffOrder = ["easy", "normal", "hard"];
   const diffRects = [];
 
@@ -3917,34 +3999,31 @@ function drawMenu(ctx) {
     diffRects.push({ rect, key });
     const isActive = game.difficulty === key;
     const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
-
-    ctx.fillStyle = isActive ? "rgba(59, 130, 246, 0.32)" : (isHover ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)");
-    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 10);
-    ctx.fill();
-    ctx.strokeStyle = isActive ? COLORS.player : "rgba(255,255,255,0.15)";
-    ctx.lineWidth = isActive ? 2 : 1;
-    ctx.stroke();
+    if (isActive) drawGlassAccent(ctx, rect.x, rect.y, rect.w, rect.h, "#5b8cff", { radius: 14 });
+    else drawGlass(ctx, rect.x, rect.y, rect.w, rect.h, { radius: 14, tint: isHover ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.05)" });
 
     ctx.fillStyle = "#fff";
-    ctx.font = "bold 22px -apple-system, sans-serif";
+    ctx.font = "bold 20px -apple-system, sans-serif";
+    ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(`${preset.emoji} ${preset.label}`, rect.x + rect.w / 2, rect.y + 28);
+    ctx.fillText(`${preset.emoji} ${preset.label}`, rect.x + rect.w / 2, rect.y + 26);
 
-    ctx.fillStyle = COLORS.hudMuted;
+    ctx.fillStyle = "rgba(240, 244, 255, 0.65)";
     ctx.font = "11px -apple-system, sans-serif";
     wrapText(ctx, preset.desc, rect.x + rect.w / 2, rect.y + 50, rect.w - 16, 13);
   }
 
   // ── BIOME ──
-  ctx.fillStyle = COLORS.hudText;
-  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.fillStyle = "rgba(240, 244, 255, 0.55)";
+  ctx.font = "bold 11px -apple-system, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("BIOME", cx, 340);
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("BIOME", cx, 336);
 
   const biomeBtnW = 130, biomeBtnH = 56, biomeGap = 14;
   const biomeTotalW = 3 * biomeBtnW + 2 * biomeGap;
   const biomeStartX = cx - biomeTotalW / 2;
-  const biomeY = 354;
+  const biomeY = 350;
   const biomeOrder = ["desert", "jungle", "snow"];
   const biomeEmoji = { desert: "🏜️", jungle: "🌴", snow: "❄️" };
   const biomeRects = [];
@@ -3954,18 +4033,14 @@ function drawMenu(ctx) {
     biomeRects.push({ rect, key });
     const isActive = game.biome === key;
     const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
-    ctx.fillStyle = isActive ? "rgba(59, 130, 246, 0.32)"
-                              : (isHover ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)");
-    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 10);
-    ctx.fill();
-    ctx.strokeStyle = isActive ? COLORS.player : "rgba(255,255,255,0.15)";
-    ctx.lineWidth = isActive ? 2 : 1;
-    ctx.stroke();
+    if (isActive) drawGlassAccent(ctx, rect.x, rect.y, rect.w, rect.h, "#c084fc", { radius: 14 });
+    else drawGlass(ctx, rect.x, rect.y, rect.w, rect.h, { radius: 14, tint: isHover ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.05)" });
     ctx.fillStyle = "#fff";
     ctx.font = "22px -apple-system, sans-serif";
+    ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(biomeEmoji[key], rect.x + rect.w / 2, rect.y + 22);
-    ctx.font = "bold 13px -apple-system, sans-serif";
+    ctx.font = "bold 12px -apple-system, sans-serif";
     ctx.fillText(BIOME_LABELS[key], rect.x + rect.w / 2, rect.y + 42);
   }
 
@@ -3979,45 +4054,39 @@ function drawMenu(ctx) {
   const playRect = { x: playStartX, y: playY, w: playW, h: playH };
   const playMpRect = { x: playStartX + playW + playGap, y: playY, w: playW, h: playH };
 
-  function drawPlayBtn(rect, label, sub, baseColor, baseColorDark) {
+  function drawPlayBtn(rect, label, sub, color) {
     const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
-    ctx.fillStyle = hover ? baseColor : baseColorDark;
-    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 12);
-    ctx.fill();
-    ctx.strokeStyle = baseColor;
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    drawGlassAccent(ctx, rect.x, rect.y, rect.w, rect.h, color, { radius: 16 });
     if (hover) {
-      ctx.shadowColor = baseColor;
-      ctx.shadowBlur = 16;
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 24;
+      roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 16);
+      ctx.strokeStyle = hexToRgba(color, 0.9);
+      ctx.lineWidth = 1.5;
       ctx.stroke();
-      ctx.shadowBlur = 0;
+      ctx.restore();
     }
     ctx.fillStyle = "#fff";
     ctx.font = "bold 22px -apple-system, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2 - 8);
+    ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2 - 9);
     ctx.font = "11px -apple-system, sans-serif";
     ctx.fillStyle = "rgba(255,255,255,0.78)";
-    ctx.fillText(sub, rect.x + rect.w / 2, rect.y + rect.h / 2 + 14);
+    ctx.fillText(sub, rect.x + rect.w / 2, rect.y + rect.h / 2 + 13);
   }
 
-  drawPlayBtn(playRect, "▶  SOLO", "Joue contre un bot", COLORS.player, COLORS.playerDark);
-  drawPlayBtn(playMpRect, "👥  MULTIJOUEUR", "Affronte un autre joueur", COLORS.enemy, COLORS.enemyDark || "rgba(220,38,38,0.4)");
+  drawPlayBtn(playRect, "▶  SOLO", "Joue contre un bot", "#5b8cff");
+  drawPlayBtn(playMpRect, "👥  MULTIJOUEUR", "Affronte un autre joueur", "#ff5b6e");
 
-  // Bouton Tutoriel (sous les 2 boutons play)
+  // Bouton Tutoriel (sous les 2 boutons play) — glass vert discret
   const tutoW = 280, tutoH = 36;
   const tutoRect = { x: cx - tutoW / 2, y: playY + playH + 12, w: tutoW, h: tutoH };
   const tutoHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, tutoRect);
-  ctx.fillStyle = tutoHover ? "rgba(34, 197, 94, 0.45)" : "rgba(34, 197, 94, 0.22)";
-  roundedRect(ctx, tutoRect.x, tutoRect.y, tutoRect.w, tutoRect.h, 8);
-  ctx.fill();
-  ctx.strokeStyle = COLORS.hpGood;
-  ctx.lineWidth = 1.4;
-  ctx.stroke();
+  drawGlassAccent(ctx, tutoRect.x, tutoRect.y, tutoRect.w, tutoRect.h, tutoHover ? "#4ade80" : "#22c55e", { radius: 12 });
   ctx.fillStyle = "#fff";
-  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.font = "bold 13px -apple-system, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText("📘  Tutoriel (1ère partie)", tutoRect.x + tutoRect.w / 2, tutoRect.y + tutoRect.h / 2);
@@ -4109,15 +4178,8 @@ function drawMenu(ctx) {
 }
 
 function drawToggleButton(ctx, rect, label, on) {
-  const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
-  ctx.fillStyle = on
-    ? (isHover ? "rgba(34, 197, 94, 0.45)" : "rgba(34, 197, 94, 0.30)")
-    : (isHover ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.22)");
-  roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 8);
-  ctx.fill();
-  ctx.strokeStyle = on ? COLORS.hpGood : COLORS.enemy;
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
+  const color = on ? "#4ade80" : "#ff5b6e";
+  drawGlassAccent(ctx, rect.x, rect.y, rect.w, rect.h, color, { radius: 12 });
 
   ctx.fillStyle = "#fff";
   ctx.font = "bold 13px -apple-system, sans-serif";
@@ -4125,10 +4187,17 @@ function drawToggleButton(ctx, rect, label, on) {
   ctx.textBaseline = "middle";
   ctx.fillText(label, rect.x + 14, rect.y + rect.h / 2);
 
-  ctx.font = "bold 12px -apple-system, sans-serif";
-  ctx.textAlign = "right";
-  ctx.fillStyle = on ? "#bbf7d0" : "#fecaca";
-  ctx.fillText(on ? "ON" : "OFF", rect.x + rect.w - 14, rect.y + rect.h / 2);
+  // Indicateur ON/OFF style pill
+  const pillW = 36, pillH = 18;
+  const pillX = rect.x + rect.w - pillW - 12;
+  const pillY = rect.y + (rect.h - pillH) / 2;
+  ctx.fillStyle = on ? "rgba(74,222,128,0.55)" : "rgba(255,91,110,0.45)";
+  roundedRect(ctx, pillX, pillY, pillW, pillH, 9);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 10px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(on ? "ON" : "OFF", pillX + pillW / 2, pillY + pillH / 2);
 }
 
 function wrapText(ctx, text, x, y, maxW, lineH) {
@@ -4149,7 +4218,14 @@ function wrapText(ctx, text, x, y, maxW, lineH) {
 }
 
 function drawGameOverOverlay(ctx) {
-  ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
+  // Voile assombrissant + nappes lumineuses pour un fond glassmorphique
+  ctx.fillStyle = "rgba(7, 9, 26, 0.78)";
+  ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+  // Nappe accent en haut
+  const ag = ctx.createRadialGradient(CONFIG.CANVAS_W / 2, 100, 0, CONFIG.CANVAS_W / 2, 100, 600);
+  ag.addColorStop(0, "rgba(91, 140, 255, 0.20)");
+  ag.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = ag;
   ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
 
   const isSpec = game.mode === "mp" && game.mp?.role === "spectator";
@@ -4348,10 +4424,21 @@ function drawMinimap(ctx) {
 }
 
 function drawHUD(ctx) {
-  ctx.fillStyle = COLORS.hudBg;
+  // Barre HUD glassmorphique : gradient sombre + highlight haut
+  ctx.save();
+  const g = ctx.createLinearGradient(0, 0, 0, CONFIG.HUD_H);
+  g.addColorStop(0, "rgba(15, 18, 32, 0.88)");
+  g.addColorStop(0.5, "rgba(20, 24, 40, 0.82)");
+  g.addColorStop(1, "rgba(10, 14, 28, 0.92)");
+  ctx.fillStyle = g;
   ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.HUD_H);
+  // Highlight bright top edge
+  ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+  ctx.fillRect(0, 0, CONFIG.CANVAS_W, 1);
+  ctx.restore();
 
-  ctx.strokeStyle = "rgba(255,255,255,0.1)";
+  // Ligne bottom plus douce
+  ctx.strokeStyle = "rgba(255,255,255,0.14)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, CONFIG.HUD_H);
@@ -6454,26 +6541,22 @@ function flashLobbyMessage(msg, level = "info") {
 }
 
 function drawLobbyBackground(ctx) {
-  const grad = ctx.createLinearGradient(0, 0, 0, CONFIG.H);
-  grad.addColorStop(0, "#0a0e1a");
-  grad.addColorStop(1, "#1a2030");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+  // Réutilise le fond glassmorphique du menu
+  drawGlassBackground(ctx);
 }
 
 function drawLobbyButton(ctx, rect, label, sub, color, colorDark) {
   const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
-  ctx.fillStyle = hover ? color : colorDark;
-  roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 12);
-  ctx.fill();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-  ctx.stroke();
+  drawGlassAccent(ctx, rect.x, rect.y, rect.w, rect.h, color, { radius: 16 });
   if (hover) {
+    ctx.save();
     ctx.shadowColor = color;
-    ctx.shadowBlur = 14;
+    ctx.shadowBlur = 24;
+    ctx.strokeStyle = hexToRgba(color, 0.9);
+    ctx.lineWidth = 1.5;
+    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 16);
     ctx.stroke();
-    ctx.shadowBlur = 0;
+    ctx.restore();
   }
   ctx.fillStyle = "#fff";
   ctx.font = "bold 22px -apple-system, sans-serif";
