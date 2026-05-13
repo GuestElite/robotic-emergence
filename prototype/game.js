@@ -280,6 +280,7 @@ const SFX_WAV_FILES = {
   "shoot-heavy":   "unit-heavy-shoot.wav",
   "shoot-swarmer": "unit-swarmer-shoot.wav",
   "shoot-sniper":  "unit-sniper-shoot.wav",
+  "shoot-air":     "unit-air-shoot.wav",
   "death":         "unit-death.wav",
   "crash":         "unit-crash-rampart.wav",
   "lightning":     "effect-lightning.wav",
@@ -287,9 +288,10 @@ const SFX_WAV_FILES = {
 
 const SFX_WAV_VOLUMES = {
   "shoot-light":   0.40,
-  "shoot-heavy":   0.40,
-  "shoot-swarmer": 0.22,  // tir spammé → volume réduit
+  "shoot-heavy":   0.45,  // grave, doit se sentir punchy
+  "shoot-swarmer": 0.20,  // tir spammé → volume réduit
   "shoot-sniper":  0.50,
+  "shoot-air":     0.38,
   "death":         0.45,
   "crash":         0.70,  // boom — laisser claquer
   "lightning":     0.65,
@@ -651,6 +653,8 @@ const SPRITE_FILES = [
   "factory-swarmer-enemy",
   "factory-sniper-player",
   "factory-sniper-enemy",
+  "factory-air-player",
+  "factory-air-enemy",
   "unit-light-player",
   "unit-light-enemy",
   "unit-heavy-player",
@@ -659,6 +663,8 @@ const SPRITE_FILES = [
   "unit-swarmer-enemy",
   "unit-sniper-player",
   "unit-sniper-enemy",
+  "unit-air-player",
+  "unit-air-enemy",
   "effect-explosion",
   // Props désert
   "prop-rock-big",
@@ -840,9 +846,9 @@ const sprites = {};
 const BIOME_SPECIFIC_SPRITES = new Set([
   "tile-ground",
   "unit-light-enemy", "unit-heavy-enemy",
-  "unit-swarmer-enemy", "unit-sniper-enemy",
+  "unit-swarmer-enemy", "unit-sniper-enemy", "unit-air-enemy",
   "factory-light-enemy", "factory-heavy-enemy",
-  "factory-swarmer-enemy", "factory-sniper-enemy",
+  "factory-swarmer-enemy", "factory-sniper-enemy", "factory-air-enemy",
 ]);
 
 // Couleur du gradient peint sur le sol par biome (rgba semi-transparent).

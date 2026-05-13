@@ -153,41 +153,101 @@ def lowpass(samples, window: int = 8):
 # ---------------------------------------------------------------------------
 
 def sfx_unit_light_shoot():
-    """Laser zap court et aigu, 0.15s."""
-    s = sweep(1800, 700, 0.15, amp=0.55, square_wave=False)
-    s = exp_decay(s, decay_rate=6)
-    return envelope_ad(s, attack_s=0.003, release_s=0.05)
+    """Blaster standard — pew classique mid-aigu, 0.15s.
+    Sweep 1500 → 400 Hz + petit punch initial + texture noise.
+    Pitch médian dans la hiérarchie : swarmer > LIGHT > sniper > heavy.
+    """
+    # Sweep descendant (corps du blaster)
+    sweep_sig = sweep(1500, 400, 0.15, amp=0.55)
+    sweep_sig = exp_decay(sweep_sig, decay_rate=6)
+    # Punch initial très court (le "clack" du tir)
+    punch = sine(800, 0.025, amp=0.6)
+    punch = exp_decay(punch, decay_rate=18)
+    # Texture noise courte (gaz / chaleur)
+    n = noise(0.04, amp=0.3, seed=11)
+    n = exp_decay(n, decay_rate=20)
+    # Mix
+    n_pad = n + [0.0] * (len(sweep_sig) - len(n))
+    punch_pad = punch + [0.0] * (len(sweep_sig) - len(punch))
+    full = mix(sweep_sig, punch_pad, n_pad)
+    return envelope_ad(full, attack_s=0.002, release_s=0.05)
 
 
 def sfx_unit_heavy_shoot():
-    """Canon lourd basse fréquence + bruit, 0.4s."""
-    bass = sine(75, 0.4, amp=0.7)
-    bass = exp_decay(bass, decay_rate=4)
-    n = noise(0.4, amp=0.45, seed=1)
-    n = lowpass(n, window=15)
-    n = exp_decay(n, decay_rate=8)
-    s = mix(bass, n)
-    return envelope_ad(s, attack_s=0.002, release_s=0.1)
+    """Blaster heavy — gros canon TRÈS GRAVE, lourd, qui pèse, 0.55s.
+    Sub-bass 55 Hz qui traîne + sweep grave 350→80 + bruit lowpass.
+    LE PLUS GRAVE de la hiérarchie : fait vibrer la poitrine.
+    """
+    # Sub-bass profond (la frappe)
+    bass = sine(55, 0.55, amp=0.78)
+    bass = exp_decay(bass, decay_rate=3.2)
+    # Sweep grave par-dessus (le "thwomp" du canon)
+    mid = sweep(350, 85, 0.32, amp=0.5)
+    mid = exp_decay(mid, decay_rate=4)
+    # Texture noise lowpass (explosion gaz)
+    n = noise(0.18, amp=0.55, seed=1)
+    n = lowpass(n, window=14)
+    n = exp_decay(n, decay_rate=6)
+    # Mix
+    mid_pad = mid + [0.0] * (len(bass) - len(mid))
+    n_pad = n + [0.0] * (len(bass) - len(n))
+    s = mix(bass, mid_pad, n_pad)
+    return envelope_ad(s, attack_s=0.001, release_s=0.18)
 
 
 def sfx_unit_swarmer_shoot():
-    """Chirp rapide et aigu, 0.08s — comme un insecte qui tire."""
-    s = sweep(2800, 1400, 0.08, amp=0.45)
-    s = exp_decay(s, decay_rate=12)
-    return envelope_ad(s, attack_s=0.002, release_s=0.02)
+    """Mini blaster swarmer — TRÈS AIGU et très court, 0.07s.
+    Sweep ultra-rapide 3200 → 1800 Hz + click initial = étincelle.
+    LE PLUS AIGU : quand un essaim tire, on entend une mitraille de tics.
+    """
+    # Sweep aigu ultra court
+    s = sweep(3200, 1800, 0.06, amp=0.42)
+    s = exp_decay(s, decay_rate=14)
+    # Click initial (le tic du tir)
+    click = noise(0.008, amp=0.55, seed=101)
+    click = lowpass(click, window=2)
+    click_pad = click + [0.0] * (len(s) - len(click))
+    full = mix(s, click_pad)
+    return envelope_ad(full, attack_s=0.001, release_s=0.02)
 
 
 def sfx_unit_sniper_shoot():
-    """Boom long avec écho — signature 'tir précis longue portée'."""
-    bass = sine(120, 0.25, amp=0.6)
+    """Sniper laser — perçant net + écho long distinctif, ~0.55s avec tail.
+    Sweep aigu précis 2000→500 + punch grave de rétroaction + écho lointain.
+    Pitch dans le médium-aigu mais avec un écho qui rend chaque tir mémorable.
+    """
+    # Sweep aigu précis (le faisceau)
+    sweep_sig = sweep(2000, 500, 0.13, amp=0.55)
+    sweep_sig = exp_decay(sweep_sig, decay_rate=8)
+    # Punch grave de rétroaction du gros canon
+    bass = sine(180, 0.20, amp=0.42)
     bass = exp_decay(bass, decay_rate=5)
-    crack = noise(0.08, amp=0.5, seed=2)
-    crack = exp_decay(crack, decay_rate=20)
-    body = mix(bass, crack)
+    bass_pad = bass + [0.0] * (len(sweep_sig) - len(bass))
+    body = mix(sweep_sig, bass_pad)
     body = envelope_ad(body, attack_s=0.001, release_s=0.08)
-    # Écho lointain
-    full = delay(body, delay_s=0.18, feedback=0.5, mix_amount=0.4)
+    # Écho lointain (rend le sniper distinctif sur le champ de bataille)
+    full = delay(body, delay_s=0.18, feedback=0.5, mix_amount=0.40)
     return full
+
+
+def sfx_unit_air_shoot():
+    """Blaster air drone — léger pew aéré, 0.12s.
+    Plus aigu et plus court que light (les drones tirent vite). Sweep 1900→550
+    + bruissement aérien (texture qui suggère le vent / l'altitude).
+    """
+    sweep_sig = sweep(1900, 550, 0.12, amp=0.5)
+    sweep_sig = exp_decay(sweep_sig, decay_rate=7)
+    # Petit punch
+    punch = sine(950, 0.02, amp=0.55)
+    punch = exp_decay(punch, decay_rate=22)
+    # Texture aérée (légère)
+    n = noise(0.10, amp=0.22, seed=99)
+    n = lowpass(n, window=10)
+    n = exp_decay(n, decay_rate=8)
+    n_pad = n + [0.0] * (len(sweep_sig) - len(n))
+    punch_pad = punch + [0.0] * (len(sweep_sig) - len(punch))
+    full = mix(sweep_sig, punch_pad, n_pad)
+    return envelope_ad(full, attack_s=0.001, release_s=0.04)
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +424,7 @@ def main():
         ("unit-heavy-shoot.wav",     sfx_unit_heavy_shoot),
         ("unit-swarmer-shoot.wav",   sfx_unit_swarmer_shoot),
         ("unit-sniper-shoot.wav",    sfx_unit_sniper_shoot),
+        ("unit-air-shoot.wav",       sfx_unit_air_shoot),
         ("unit-death.wav",           sfx_unit_death),
         ("unit-crash-rampart.wav",   sfx_unit_crash_rampart),
         ("effect-lightning.wav",     sfx_effect_lightning),
