@@ -292,6 +292,78 @@ def sfx_unit_crash_rampart():
     return envelope_ad(s, attack_s=0.0005, release_s=0.18)
 
 
+def sfx_ambient_desert(duration: float = 30.0):
+    """Vent désertique chaud — noise lowpass mid + LFO lent + petit whistle.
+    Ton chaud, sec, médium. Pour la boucle propre : fade in/out 2s.
+    """
+    n = int(duration * SAMPLE_RATE)
+    base = noise(duration, amp=0.50, seed=200)
+    base = lowpass(base, window=10)  # adoucit les aigus (vent chaud)
+    out = []
+    for i, s in enumerate(base):
+        t = i / SAMPLE_RATE
+        slow_lfo = 0.55 + 0.40 * math.sin(2 * math.pi * 0.15 * t)
+        fast_lfo = 0.85 + 0.15 * math.sin(2 * math.pi * 0.70 * t + 0.5)
+        # Léger sifflement modulé en fond (suggère le sable porté par le vent)
+        whistle = 0.04 * math.sin(2 * math.pi * 620 * t +
+                                   math.sin(2 * math.pi * 0.30 * t))
+        out.append(s * slow_lfo * fast_lfo + whistle)
+    # Fade in/out pour boucle parfaite
+    fade_n = int(2.0 * SAMPLE_RATE)
+    for i in range(fade_n):
+        out[i] *= i / fade_n
+        out[-i - 1] *= i / fade_n
+    return [math.tanh(s) for s in out]
+
+
+def sfx_ambient_jungle(duration: float = 30.0):
+    """Brise jungle humide — noise très lowpass + souffle doux + rumble grave.
+    Atmosphère feutrée, peu d'aigus (l'humidité absorbe les hautes fréquences).
+    """
+    n = int(duration * SAMPLE_RATE)
+    base = noise(duration, amp=0.55, seed=201)
+    base = lowpass(base, window=18)  # très étouffé (air dense, feuilles)
+    out = []
+    for i, s in enumerate(base):
+        t = i / SAMPLE_RATE
+        slow_lfo = 0.50 + 0.45 * math.sin(2 * math.pi * 0.08 * t)
+        breath_lfo = 0.70 + 0.30 * math.sin(2 * math.pi * 0.22 * t + 1.2)
+        # Rumble grave très faible (humidité dense, écho de la canopée)
+        rumble = 0.05 * math.sin(2 * math.pi * 90 * t)
+        out.append(s * slow_lfo * breath_lfo + rumble)
+    fade_n = int(2.0 * SAMPLE_RATE)
+    for i in range(fade_n):
+        out[i] *= i / fade_n
+        out[-i - 1] *= i / fade_n
+    return [math.tanh(s) for s in out]
+
+
+def sfx_ambient_snow(duration: float = 30.0):
+    """Blizzard neigeux — noise highpass aigu + howl sifflant + gusts marqués.
+    Ton froid, mordant, dominé par les aigus. Les rafales (LFO 0.3Hz) sont
+    plus violentes que pour le désert.
+    """
+    n = int(duration * SAMPLE_RATE)
+    base = noise(duration, amp=0.55, seed=202)
+    # Highpass-ish : original - heavily-lowpassed = isole les aigus
+    very_lp = lowpass(base, window=30)
+    base_hp = [a - b * 0.70 for a, b in zip(base, very_lp)]
+    out = []
+    for i, s in enumerate(base_hp):
+        t = i / SAMPLE_RATE
+        # Gusts plus brutaux que le désert (variation 0→1 plutôt que 0.15→0.95)
+        gust = 0.50 + 0.50 * math.sin(2 * math.pi * 0.30 * t)
+        # Howl sifflant aigu (le vent froid qui passe entre les rochers)
+        howl = 0.08 * math.sin(2 * math.pi * 1100 * t +
+                                3 * math.sin(2 * math.pi * 0.25 * t))
+        out.append(s * gust + howl)
+    fade_n = int(2.0 * SAMPLE_RATE)
+    for i in range(fade_n):
+        out[i] *= i / fade_n
+        out[-i - 1] *= i / fade_n
+    return [math.tanh(s) for s in out]
+
+
 def sfx_effect_lightning():
     """Foudre : crack initial + rumble basse profond + queue longue, ~1.5s."""
     # Crack initial (court mais punchy)
@@ -428,6 +500,10 @@ def main():
         ("unit-death.wav",           sfx_unit_death),
         ("unit-crash-rampart.wav",   sfx_unit_crash_rampart),
         ("effect-lightning.wav",     sfx_effect_lightning),
+        # Ambient par biome (boucles 30s, fade in/out propre pour loop seamless)
+        ("ambient-desert.wav",       lambda: sfx_ambient_desert(30.0)),
+        ("ambient-jungle.wav",       lambda: sfx_ambient_jungle(30.0)),
+        ("ambient-snow.wav",         lambda: sfx_ambient_snow(30.0)),
     ]
     # NB: la musique de fond utilise maintenant "Pathfinder" de Scott Buckley
     # (CC-BY 4.0) téléchargée dans music/bgm-pathfinder.mp3. La fonction

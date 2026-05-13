@@ -307,6 +307,8 @@ const audio = {
   musicNodes: [],
   bgmAudio: null,
   bgmVolume: 0.22,     // référence interne (mixée avec musicVolume)
+  ambientAudio: null,
+  ambientVolume: 0.16, // sous la BGM, juste assez pour donner vie au biome
   wavBuffers: {},
   lastSfxTime: {},
   async preloadWavs() {
@@ -465,15 +467,44 @@ const audio = {
       try { this.bgmAudio.pause(); this.bgmAudio.currentTime = 0; } catch (_) {}
     }
   },
+  // ── Ambient (vent / souffle de biome, loopé sous la BGM)
+  startAmbient(biome) {
+    if (!this.musicEnabled) return;  // suit le toggle musique pour V1
+    const validBiomes = ["desert", "jungle", "snow"];
+    const b = validBiomes.includes(biome) ? biome : "desert";
+    // Si on change de biome → reset l'audio
+    if (this.ambientAudio && this.ambientAudio._biome !== b) {
+      try { this.ambientAudio.pause(); } catch (_) {}
+      this.ambientAudio = null;
+    }
+    if (!this.ambientAudio) {
+      this.ambientAudio = new Audio(`../11-sound-design/sfx/ambient-${b}.wav`);
+      this.ambientAudio.loop = true;
+      this.ambientAudio._biome = b;
+    }
+    this.ambientAudio.volume = this.ambientVolume * this.musicVolume;
+    this.ambientAudio.play().catch(() => {});
+  },
+  stopAmbient() {
+    if (this.ambientAudio) {
+      try { this.ambientAudio.pause(); this.ambientAudio.currentTime = 0; } catch (_) {}
+    }
+  },
   setMusicEnabled(on) {
     this.musicEnabled = on;
-    if (on && game.screen === "playing") this.startMusic();
-    else this.stopMusic();
+    if (on && game.screen === "playing") {
+      this.startMusic();
+      this.startAmbient(game.biome);
+    } else {
+      this.stopMusic();
+      this.stopAmbient();
+    }
   },
   setSfxEnabled(on) { this.sfxEnabled = on; },
   setMusicVolume(v) {
     this.musicVolume = Math.max(0, Math.min(1, v));
     if (this.bgmAudio) this.bgmAudio.volume = this.bgmVolume * this.musicVolume;
+    if (this.ambientAudio) this.ambientAudio.volume = this.ambientVolume * this.musicVolume;
   },
   setSfxVolume(v) { this.sfxVolume = Math.max(0, Math.min(1, v)); },
 };
@@ -1561,11 +1592,13 @@ function checkGameOver() {
     game.gameOver = { winner: "enemy" };
     audio.playSFX(mySide() === "enemy" ? "win" : "lose");
     audio.stopMusic();
+    audio.stopAmbient();
     notifyGameOver("enemy");
   } else if (game.enemy.baseHP <= 0) {
     game.gameOver = { winner: "player" };
     audio.playSFX(mySide() === "player" ? "win" : "lose");
     audio.stopMusic();
+    audio.stopAmbient();
     notifyGameOver("player");
   }
 }
@@ -5274,12 +5307,14 @@ function startGame(difficulty) {
   game.screen = "playing";
   saveSettings();
   audio.startMusic();
+  audio.startAmbient(game.biome);
 }
 
 function goToMenu() {
   game.screen = "menu";
   game.gameOver = null;
   audio.stopMusic();
+  audio.stopAmbient();
   // Si on revient au menu depuis un lobby/partie multi, on quitte proprement le canal
   if (game.mp && window.RE_MP) {
     try { window.RE_MP.leave(); } catch {}
@@ -5489,6 +5524,7 @@ function startMpGame() {
     game.camera.x = maxScroll;
   }
   audio.startMusic();
+  audio.startAmbient(game.biome);
 }
 
 async function cancelMultiplayer() {
@@ -6376,6 +6412,7 @@ function handleMpGameOver({ winnerSide }) {
   // winnerSide est en perspective host : "player" (host gagne) ou "enemy" (guest gagne)
   game.gameOver = { winner: winnerSide || "player", at: performance.now() };
   audio.stopMusic();
+  audio.stopAmbient();
   if (window.RE_MP && game.mp?.role === "host") {
     const mappedWinner = winnerSide === "player" ? "host" : "guest";
     try { window.RE_MP.sendGameOver(winnerSide); } catch {}
@@ -6394,6 +6431,7 @@ function handleMpOpponentLeave() {
     const myWinner = mySide();
     game.gameOver = { winner: myWinner, at: performance.now(), reason: "opponent_left" };
     audio.stopMusic();
+    audio.stopAmbient();
   } else if (game.screen === "lobby") {
     flashLobbyMessage("L'adversaire a quitté avant le début de la partie.", "warn");
   }
