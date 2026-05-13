@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Roadmap — Projet RE</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-elev: #1f2733;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent-bright: #79c0ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --code-bg: #1f2733;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff;
+      --bg-card: #f6f8fa;
+      --bg-elev: #ffffff;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --text-dim: #59636e;
+      --accent: #0969da;
+      --accent-bright: #0550ae;
+      --green: #1a7f37;
+      --orange: #9a6700;
+      --red: #cf222e;
+      --purple: #8250df;
+      --code-bg: #f6f8fa;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Text', Roboto, sans-serif;
+    line-height: 1.6;
+    font-size: 15px;
+  }
+
+  .container {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 48px 24px;
+  }
+
+  /* HEADER */
+  header {
+    text-align: center;
+    margin-bottom: 64px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  header .eyebrow {
+    color: var(--accent);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-weight: 600;
+    margin-bottom: 16px;
+  }
+
+  header h1 {
+    font-size: 48px;
+    font-weight: 800;
+    margin: 0 0 16px;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--purple) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  header .subtitle {
+    font-size: 18px;
+    color: var(--text-dim);
+    max-width: 640px;
+    margin: 0 auto 24px;
+  }
+
+  header .meta {
+    display: inline-flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    justify-content: center;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  header .meta span strong {
+    color: var(--text);
+    margin-left: 6px;
+  }
+
+  /* SECTIONS */
+  section {
+    margin: 48px 0;
+  }
+
+  h2 {
+    font-size: 28px;
+    margin: 0 0 24px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  h3 {
+    font-size: 20px;
+    margin: 32px 0 12px;
+    color: var(--text);
+  }
+
+  h4 {
+    font-size: 15px;
+    margin: 16px 0 8px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+  }
+
+  p { margin: 0 0 12px; }
+
+  /* TIMELINE FLOW */
+  .timeline {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 32px;
+    overflow-x: auto;
+  }
+
+  .timeline-flow {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    min-width: 720px;
+  }
+
+  .flow-step {
+    flex: 1;
+    text-align: center;
+  }
+
+  .flow-step .badge {
+    display: inline-block;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 50px;
+    padding: 4px 12px;
+    font-size: 11px;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .flow-step .name {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 4px;
+  }
+
+  .flow-step .duration {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .flow-arrow {
+    color: var(--text-dim);
+    font-size: 18px;
+  }
+
+  /* PHASE CARDS */
+  .phase {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    margin-bottom: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .phase::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+    background: var(--accent);
+  }
+
+  .phase[data-phase="0"]::before { background: #58a6ff; }
+  .phase[data-phase="1"]::before { background: #79c0ff; }
+  .phase[data-phase="2"]::before { background: #d2a8ff; }
+  .phase[data-phase="3"]::before { background: #bc8cff; }
+  .phase[data-phase="4"]::before { background: #ffa657; }
+  .phase[data-phase="5"]::before { background: #56d364; }
+
+  .phase-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  .phase-number {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .phase-title {
+    flex: 1;
+    min-width: 200px;
+  }
+
+  .phase-title h3 {
+    margin: 0;
+    font-size: 22px;
+  }
+
+  .phase-title .duration {
+    color: var(--text-dim);
+    font-size: 13px;
+    margin-top: 4px;
+  }
+
+  .phase-status {
+    padding: 4px 12px;
+    border-radius: 50px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .status-active {
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--green);
+    border: 1px solid rgba(63, 185, 80, 0.3);
+  }
+
+  .status-pending {
+    background: rgba(139, 148, 158, 0.15);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+
+  /* GRIDS */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin: 16px 0;
+  }
+
+  .info-block {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+
+  .info-block h4 {
+    margin-top: 0;
+  }
+
+  /* LISTS */
+  ul, ol {
+    margin: 8px 0;
+    padding-left: 24px;
+  }
+
+  li { margin-bottom: 6px; }
+
+  ul.clean {
+    list-style: none;
+    padding-left: 0;
+  }
+
+  ul.clean li {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  ul.clean li:last-child { border-bottom: none; }
+
+  ul.checks li::before {
+    content: '✓';
+    color: var(--green);
+    margin-right: 8px;
+    font-weight: bold;
+  }
+
+  /* TABLES */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+
+  th, td {
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  th {
+    background: var(--bg-card);
+    font-weight: 600;
+    color: var(--text-dim);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  tr:hover td { background: rgba(88, 166, 255, 0.04); }
+
+  /* BADGES */
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 50px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+  }
+
+  .badge-green { color: var(--green); border-color: rgba(63, 185, 80, 0.4); }
+  .badge-orange { color: var(--orange); border-color: rgba(210, 153, 34, 0.4); }
+  .badge-red { color: var(--red); border-color: rgba(248, 81, 73, 0.4); }
+  .badge-blue { color: var(--accent); border-color: rgba(88, 166, 255, 0.4); }
+
+  /* CALLOUTS */
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: rgba(88, 166, 255, 0.06);
+    padding: 16px 20px;
+    border-radius: 6px;
+    margin: 20px 0;
+  }
+
+  .callout-warning {
+    border-left-color: var(--orange);
+    background: rgba(210, 153, 34, 0.06);
+  }
+
+  .callout-danger {
+    border-left-color: var(--red);
+    background: rgba(248, 81, 73, 0.06);
+  }
+
+  .callout-success {
+    border-left-color: var(--green);
+    background: rgba(63, 185, 80, 0.06);
+  }
+
+  .callout strong { display: block; margin-bottom: 4px; }
+
+  /* KPI / METRICS */
+  .kpi-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+  }
+
+  .kpi {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+
+  .kpi-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+
+  .kpi-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent-bright);
+  }
+
+  /* CHECKLIST */
+  .checklist li {
+    list-style: none;
+    padding-left: 28px;
+    position: relative;
+    margin-bottom: 8px;
+  }
+
+  .checklist li::before {
+    content: '☐';
+    position: absolute;
+    left: 0;
+    color: var(--text-dim);
+    font-size: 16px;
+  }
+
+  /* FOOTER */
+  footer {
+    margin-top: 80px;
+    padding-top: 32px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+
+  /* RESPONSIVE */
+  @media (max-width: 640px) {
+    .container { padding: 24px 16px; }
+    header h1 { font-size: 32px; }
+    h2 { font-size: 22px; }
+    .phase { padding: 20px; }
+    .phase-number { width: 40px; height: 40px; font-size: 20px; }
+  }
+
+  /* PRINT */
+  @media print {
+    body { background: white; color: black; }
+    .phase, .timeline, .info-block, table, .kpi, .callout {
+      page-break-inside: avoid;
+      box-shadow: none;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="eyebrow">Roadmap maître</div>
+  <h1>Projet RE</h1>
+  <p class="subtitle">Transformer le concept de Robotic Emergence en un jeu mobile moderne, viable commercialement, en évitant les 4 erreurs majeures du jeu original.</p>
+  <div class="meta">
+    <span>Statut global :<strong><span class="badge badge-green">Phase 0 en cours</span></strong></span>
+    <span>Démarrage :<strong>2026-05-12</strong></span>
+    <span>Version :<strong>V1</strong></span>
+  </div>
+</header>
+
+<section>
+  <h2>Vue d'ensemble — 6 phases</h2>
+
+  <div class="timeline">
+    <div class="timeline-flow">
+      <div class="flow-step">
+        <div class="badge">Phase 0</div>
+        <div class="name">Vision</div>
+        <div class="duration">1-2 sem.</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="badge">Phase 1</div>
+        <div class="name">Pré-prod</div>
+        <div class="duration">4-6 sem.</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="badge">Phase 2</div>
+        <div class="name">Prototype</div>
+        <div class="duration">8-12 sem.</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="badge">Phase 3</div>
+        <div class="name">Production</div>
+        <div class="duration">3-6 mois</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="badge">Phase 4</div>
+        <div class="name">Soft launch</div>
+        <div class="duration">1-2 mois</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="badge">Phase 5</div>
+        <div class="name">Global</div>
+        <div class="duration">Continu</div>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Phase</th>
+        <th>Nom</th>
+        <th>Durée</th>
+        <th>Livrable clé</th>
+        <th>KPI sortie</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>0</strong></td>
+        <td>Vision &amp; Différenciation</td>
+        <td>1-2 sem</td>
+        <td>Pitch validé + pivot narratif</td>
+        <td>Pitch écrit + 1 nom retenu</td>
+      </tr>
+      <tr>
+        <td><strong>1</strong></td>
+        <td>Pré-production / GDD</td>
+        <td>4-6 sem</td>
+        <td>GDD complet + maquettes UI</td>
+        <td>GDD V1 signé</td>
+      </tr>
+      <tr>
+        <td><strong>2</strong></td>
+        <td>Prototype / Vertical Slice</td>
+        <td>8-12 sem</td>
+        <td>1 niveau jouable end-to-end</td>
+        <td>Note testeurs ≥ 6/10</td>
+      </tr>
+      <tr>
+        <td><strong>3</strong></td>
+        <td>Production MVP</td>
+        <td>3-6 mois</td>
+        <td>App store-ready (5 niveaux + endurance)</td>
+        <td>TestFlight + Play Internal OK</td>
+      </tr>
+      <tr>
+        <td><strong>4</strong></td>
+        <td>Soft launch</td>
+        <td>1-2 mois</td>
+        <td>Lancement sur 1-2 pays test</td>
+        <td>D1 ≥ 40%, D7 ≥ 15%</td>
+      </tr>
+      <tr>
+        <td><strong>5</strong></td>
+        <td>Global launch + LiveOps</td>
+        <td>Continu</td>
+        <td>Lancement mondial + events</td>
+        <td>D30 ≥ 5%, ARPDAU ≥ 0,10€</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Détail des phases</h2>
+
+  <!-- PHASE 0 -->
+  <div class="phase" data-phase="0">
+    <div class="phase-header">
+      <div class="phase-number">0</div>
+      <div class="phase-title">
+        <h3>Vision &amp; Différenciation</h3>
+        <div class="duration">1-2 semaines</div>
+      </div>
+      <span class="phase-status status-active">En cours</span>
+    </div>
+
+    <h4>Objectif</h4>
+    <p>Définir <strong>ce que sera notre jeu</strong> (et ce qu'il ne sera pas) avant d'écrire la moindre ligne de spec.</p>
+
+    <h4>Tâches</h4>
+    <ul class="checklist">
+      <li>Choisir le pivot narratif (3 options proposées)</li>
+      <li>Choisir un nom de jeu (shortlist faite)</li>
+      <li>Valider les 4 axes de différenciation vs original</li>
+      <li>Identifier la cible (casual, mid-core, hardcore)</li>
+      <li>Décision business model (F2P ads / F2P IAP / Premium / Hybrid)</li>
+    </ul>
+
+    <h4>Livrables</h4>
+    <ul>
+      <li><code>01-vision-pitch/pitch-final.md</code> — pitch validé d'1 page</li>
+      <li>Nom de projet définitif</li>
+      <li>Persona joueur cible</li>
+    </ul>
+
+    <div class="callout callout-success">
+      <strong>✓ KPI de sortie</strong>
+      Tu peux pitcher le jeu en 30 secondes à n'importe qui.
+    </div>
+  </div>
+
+  <!-- PHASE 1 -->
+  <div class="phase" data-phase="1">
+    <div class="phase-header">
+      <div class="phase-number">1</div>
+      <div class="phase-title">
+        <h3>Pré-production / GDD</h3>
+        <div class="duration">4-6 semaines</div>
+      </div>
+      <span class="phase-status status-pending">À venir</span>
+    </div>
+
+    <h4>Objectif</h4>
+    <p>Documenter <strong>tout le jeu sur papier</strong> avant la première ligne de code. C'est la phase la moins chère pour itérer.</p>
+
+    <h4>Tâches principales</h4>
+    <div class="grid-2">
+      <div class="info-block">
+        <h4>GDD complet</h4>
+        <p>Core loop, unités, factories, upgrade, météo, économie en partie</p>
+      </div>
+      <div class="info-block">
+        <h4>Méta-progression</h4>
+        <p>Arbre de talents complet + système de prestige</p>
+      </div>
+      <div class="info-block">
+        <h4>Skins</h4>
+        <p>Catalogue initial (10-20 skins) + système de rareté</p>
+      </div>
+      <div class="info-block">
+        <h4>Événements</h4>
+        <p>Calendrier annuel type + 5-8 formats d'events</p>
+      </div>
+      <div class="info-block">
+        <h4>Économie F2P</h4>
+        <p>Sources/sinks de currency + pricing IAP + stratégie ads</p>
+      </div>
+      <div class="info-block">
+        <h4>Art direction</h4>
+        <p>Style visuel choisi + palette + mood board</p>
+      </div>
+      <div class="info-block">
+        <h4>Stack technique</h4>
+        <p>Moteur choisi + stack backend</p>
+      </div>
+      <div class="info-block">
+        <h4>UX mobile</h4>
+        <p>Wireframes des 15 écrans clés + portrait vs paysage</p>
+      </div>
+    </div>
+
+    <h4>Livrables</h4>
+    <ul>
+      <li>GDD V1 complet (~30-50 pages)</li>
+      <li>Wireframes ~15 écrans</li>
+      <li>Mood board art direction</li>
+    </ul>
+
+    <div class="callout callout-success">
+      <strong>✓ KPI de sortie</strong>
+      Un dev externe pourrait commencer à coder à partir des docs.
+    </div>
+  </div>
+
+  <!-- PHASE 2 -->
+  <div class="phase" data-phase="2">
+    <div class="phase-header">
+      <div class="phase-number">2</div>
+      <div class="phase-title">
+        <h3>Prototype / Vertical Slice</h3>
+        <div class="duration">8-12 semaines</div>
+      </div>
+      <span class="phase-status status-pending">À venir</span>
+    </div>
+
+    <h4>Objectif</h4>
+    <p><strong>1 niveau jouable end-to-end</strong> dans une qualité proche du jeu final. Pas plus, pas moins.</p>
+
+    <h4>Tâches</h4>
+    <ul>
+      <li>Setup du projet (moteur, repo, CI)</li>
+      <li>Implémentation du core loop (1 niveau, 2 factories, 2 unités)</li>
+      <li>UI/UX du gameplay</li>
+      <li>Sons et musiques placeholder</li>
+      <li>Système de sauvegarde local</li>
+      <li><strong>Tests utilisateurs</strong> : 10-15 personnes externes</li>
+    </ul>
+
+    <h4>KPI de sortie</h4>
+    <ul class="checks">
+      <li>Note moyenne testeurs ≥ 6/10</li>
+      <li>Au moins 70% des testeurs veulent rejouer</li>
+    </ul>
+
+    <div class="callout callout-danger">
+      <strong>⚠️ Go/No-Go</strong>
+      À cette étape, on décide si on continue le projet ou si on pivote.
+    </div>
+  </div>
+
+  <!-- PHASE 3 -->
+  <div class="phase" data-phase="3">
+    <div class="phase-header">
+      <div class="phase-number">3</div>
+      <div class="phase-title">
+        <h3>Production MVP</h3>
+        <div class="duration">3-6 mois</div>
+      </div>
+      <span class="phase-status status-pending">À venir</span>
+    </div>
+
+    <h4>Objectif</h4>
+    <p>Version <strong>App Store-ready</strong> avec contenu minimum viable.</p>
+
+    <div class="grid-2">
+      <div class="info-block">
+        <h4>✓ Scope MVP</h4>
+        <ul class="checks" style="margin: 0;">
+          <li>5 niveaux campagne</li>
+          <li>Mode endurance avec scaling FIXÉ</li>
+          <li>6 factories + 6 unités</li>
+          <li>Méta-progression (talents 1-20)</li>
+          <li>5-10 skins</li>
+          <li>2 événements types</li>
+          <li>Tutoriel guidé</li>
+          <li>Système de save cloud</li>
+          <li>Leaderboards</li>
+          <li>IAP + Rewarded ads</li>
+          <li>Localisation FR + EN + ES</li>
+        </ul>
+      </div>
+      <div class="info-block">
+        <h4>✗ Hors-scope MVP (V2)</h4>
+        <ul style="margin: 0;">
+          <li>PvP</li>
+          <li>Mode coop</li>
+          <li>Plus de 5 niveaux</li>
+          <li>Système de guildes</li>
+        </ul>
+      </div>
+    </div>
+
+    <h4>KPI de sortie</h4>
+    <ul class="checks">
+      <li>Build stable (&lt; 1% crash rate)</li>
+      <li>Validation App Store / Play Store</li>
+      <li>ASO baseline rédigé</li>
+    </ul>
+  </div>
+
+  <!-- PHASE 4 -->
+  <div class="phase" data-phase="4">
+    <div class="phase-header">
+      <div class="phase-number">4</div>
+      <div class="phase-title">
+        <h3>Soft launch</h3>
+        <div class="duration">1-2 mois</div>
+      </div>
+      <span class="phase-status status-pending">À venir</span>
+    </div>
+
+    <h4>Objectif</h4>
+    <p>Tester <strong>les métriques de rétention et monétisation</strong> sur un marché restreint avant le lancement mondial.</p>
+
+    <h4>Marchés tests possibles</h4>
+    <div class="grid-2">
+      <div class="info-block">
+        <h4>Option A — Hard mode</h4>
+        <p>Canada, Australie, Nouvelle-Zélande<br><span style="color: var(--text-dim); font-size: 13px;">Anglophone, marché mature</span></p>
+      </div>
+      <div class="info-block">
+        <h4>Option B — Cost-effective</h4>
+        <p>Philippines, Pologne, Brésil<br><span style="color: var(--text-dim); font-size: 13px;">Volume + coût UA faible</span></p>
+      </div>
+    </div>
+
+    <h4>KPI cibles</h4>
+    <table>
+      <thead>
+        <tr><th>Métrique</th><th>Seuil minimum</th><th>Cible</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>D1 retention</td><td>40%</td><td>50%</td></tr>
+        <tr><td>D7 retention</td><td>15%</td><td>22%</td></tr>
+        <tr><td>D30 retention</td><td>5%</td><td>8%</td></tr>
+        <tr><td>Session length</td><td>5 min</td><td>8 min</td></tr>
+        <tr><td>Sessions/jour</td><td>2</td><td>4</td></tr>
+        <tr><td>ARPDAU</td><td>0,05€</td><td>0,15€</td></tr>
+        <tr><td>Crash-free rate</td><td>99%</td><td>99,5%</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-warning">
+      <strong>⚠️ Go/No-Go</strong>
+      Si métriques &lt; seuil minimum → on retravaille (3-6 mois) avant global. Entre seuil et cible → optimisation puis global. Au-delà de la cible → on lance vite et on scale l'UA.
+    </div>
+  </div>
+
+  <!-- PHASE 5 -->
+  <div class="phase" data-phase="5">
+    <div class="phase-header">
+      <div class="phase-number">5</div>
+      <div class="phase-title">
+        <h3>Global launch + LiveOps</h3>
+        <div class="duration">Continu</div>
+      </div>
+      <span class="phase-status status-pending">À venir</span>
+    </div>
+
+    <h4>Objectif</h4>
+    <p>Lancement mondial + opérations en live pour faire vivre le jeu.</p>
+
+    <h4>Rythme LiveOps</h4>
+    <table>
+      <thead>
+        <tr><th>Fréquence</th><th>Action</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Hebdo</strong></td><td>Daily challenges (auto), patch de balance si besoin</td></tr>
+        <tr><td><strong>Bi-hebdo</strong></td><td>Événement thématique (durée 7-14 jours)</td></tr>
+        <tr><td><strong>Mensuel</strong></td><td>Battle Pass (saison de 30 jours)</td></tr>
+        <tr><td><strong>Trimestriel</strong></td><td>Major update (nouveau contenu, faction, map)</td></tr>
+        <tr><td><strong>Annuel</strong></td><td>Saison anniversaire + revisite des skins</td></tr>
+      </tbody>
+    </table>
+
+    <h4>Équipe nécessaire (à terme)</h4>
+    <ul>
+      <li>1 PM / game designer (toi)</li>
+      <li>1-2 développeurs</li>
+      <li>1 artiste / UI designer</li>
+      <li>1 sound designer (freelance)</li>
+      <li>1 community manager (à partir du soft launch)</li>
+    </ul>
+  </div>
+
+</section>
+
+<section>
+  <h2>Critical path &amp; risques</h2>
+
+  <div class="grid-2">
+    <div>
+      <h3 style="color: var(--red);">🔴 Risques critiques</h3>
+      <ol>
+        <li><strong>Saturation marché</strong> : auto-battler mobile encombré → différenciation forte indispensable</li>
+        <li><strong>Difficulté de balance</strong> : économie F2P + équilibrage factories + scaling endurance = très technique</li>
+        <li><strong>Coût d'acquisition</strong> : CPI mobile en hausse constante → budget UA à prévoir</li>
+        <li><strong>Solo / petite équipe</strong> : prévoir 18-24 mois jusqu'au global launch</li>
+      </ol>
+    </div>
+    <div>
+      <h3 style="color: var(--green);">🟢 Atouts</h3>
+      <ol>
+        <li><strong>Concept éprouvé</strong> mais peu exploité sur mobile</li>
+        <li><strong>Mécanique unique</strong> des factories connectées par chemins</li>
+        <li><strong>Retours du jeu original</strong> nous indiquent où corriger</li>
+        <li><strong>Marché auto-battler</strong> : audience établie et engagée</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Budget approximatif</h2>
+  <p>Ordres de grandeur — à affiner après choix du scope définitif.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Phase</th>
+        <th>Solo</th>
+        <th>Petite équipe (3 pers)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Phase 0-1</td><td>0€ (temps personnel)</td><td>15-30k€</td></tr>
+      <tr><td>Phase 2</td><td>2-5k€ (assets, outils)</td><td>50-80k€</td></tr>
+      <tr><td>Phase 3</td><td>5-15k€ (assets premium, son)</td><td>100-200k€</td></tr>
+      <tr><td>Phase 4</td><td>3-10k€ (UA test)</td><td>20-50k€</td></tr>
+      <tr><td>Phase 5</td><td>Variable (UA scale)</td><td>Variable</td></tr>
+      <tr style="background: var(--bg-card); font-weight: 600;">
+        <td>Total avant scale</td>
+        <td><span class="badge badge-blue">10-30k€</span></td>
+        <td><span class="badge badge-blue">200-400k€</span></td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Prochaines actions immédiates</h2>
+
+  <div class="callout">
+    <strong>🎯 Phase 0 — décisions à prendre maintenant</strong>
+  </div>
+
+  <ol style="font-size: 16px;">
+    <li><strong>Toi :</strong> choisir entre les 3 pitches narratifs (cf. <code>01-vision-pitch/pitch-options.md</code>)</li>
+    <li><strong>Toi :</strong> shortlister 3 noms de jeu (cf. <code>01-vision-pitch/working-name.md</code>)</li>
+    <li><strong>Toi :</strong> valider le business model F2P ou Premium (cf. <code>07-economy-monetization/</code>)</li>
+    <li><strong>Moi :</strong> à partir de tes choix → rédiger le pitch final + démarrer le GDD V1</li>
+  </ol>
+</section>
+
+<footer>
+  <p>Projet RE — Roadmap V1 • Généré le 2026-05-12</p>
+  <p>Document vivant — version maître : <code>ROADMAP.md</code></p>
+</footer>
+
+</div>
+</body>
+</html>
