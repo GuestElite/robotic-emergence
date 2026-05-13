@@ -266,26 +266,48 @@ async function setupChannel() {
     }
   });
 
+  // On attend le SUBSCRIBED, mais avec un timeout dur de 6 s pour ne JAMAIS
+  // bloquer indéfiniment la création du salon. Si le canal n'est pas encore
+  // prêt à 6s, on continue quand même : il finira par se brancher dans le
+  // background (ou le poll DB prendra le relais).
   await new Promise((resolve) => {
-    ch.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        try { await ch.track({ user_id: state.me?.id, username: state.me?.username, role: state.role }); } catch {}
-        const skinPayload = state.mySkin ? { hex_color: state.mySkin.hex_color, hex_color_dark: state.mySkin.hex_color_dark } : null;
-        if (state.role === "guest") {
-          ch.send({
-            type: "broadcast", event: "hello",
-            payload: { from: "guest", username: state.me?.username || null, skin: skinPayload },
-          });
+    let resolved = false;
+    const finish = () => { if (!resolved) { resolved = true; resolve(); } };
+    const timeout = setTimeout(() => {
+      if (!resolved) console.warn("[RE_MP] channel subscribe timeout (6s) — on continue quand même");
+      finish();
+    }, 6000);
+    try {
+      ch.subscribe(async (status) => {
+        if (status === "SUBSCRIBED") {
+          clearTimeout(timeout);
+          try { await ch.track({ user_id: state.me?.id, username: state.me?.username, role: state.role }); } catch {}
+          const skinPayload = state.mySkin ? { hex_color: state.mySkin.hex_color, hex_color_dark: state.mySkin.hex_color_dark } : null;
+          if (state.role === "guest") {
+            ch.send({
+              type: "broadcast", event: "hello",
+              payload: { from: "guest", username: state.me?.username || null, skin: skinPayload },
+            });
+          }
+          if (state.role === "spectator") {
+            ch.send({
+              type: "broadcast", event: "hello",
+              payload: { from: "spectator", username: state.me?.username || null, skin: skinPayload },
+            });
+          }
+          finish();
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          console.warn("[RE_MP] channel status", status);
+          // On résout quand même pour ne pas bloquer l'UI
+          clearTimeout(timeout);
+          finish();
         }
-        if (state.role === "spectator") {
-          ch.send({
-            type: "broadcast", event: "hello",
-            payload: { from: "spectator", username: state.me?.username || null, skin: skinPayload },
-          });
-        }
-        resolve();
-      }
-    });
+      });
+    } catch (err) {
+      console.error("[RE_MP] subscribe threw", err);
+      clearTimeout(timeout);
+      finish();
+    }
   });
 
   state.channel = ch;

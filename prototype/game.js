@@ -5155,7 +5155,9 @@ function drawSurrenderButton(ctx) {
   const btnH = 26;
   const rect = { x: btnX, y: btnY, w: btnW, h: btnH };
   const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
-  const armed = !isSpec && game.ui.surrenderArmedAt && (performance.now() - game.ui.surrenderArmedAt < 3000);
+  // Persiste tant que le joueur n'a pas confirmé/annulé. Plus de timeout
+  // 3s qui faisait croire à un bug ("le bouton repassait à abandonner").
+  const armed = !isSpec && !!game.ui.surrenderArmedAt;
   ctx.save();
   if (armed) {
     const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 180);
@@ -5198,23 +5200,24 @@ function drawSurrenderButton(ctx) {
 async function trySurrender() {
   if (!window.RE_MP || game.mode !== "mp") return;
   if (game.gameOver) return;
-  // Confirmation simple via un flag : 1er clic arme, 2e confirme dans les 3s.
-  const now = performance.now();
-  if (!game.ui.surrenderArmedAt || now - game.ui.surrenderArmedAt > 3000) {
-    game.ui.surrenderArmedAt = now;
-    flashLobbyMessage("");
-    // Affiche un message visuel temporaire
+  // Confirmation 2-clics persistante : reste armé tant que le joueur n'a pas
+  // confirmé OU annulé explicitement (Échap ou clic ailleurs). Pas d'auto-revert
+  // qui rendait le 2e clic ambigu.
+  if (!game.ui.surrenderArmedAt) {
+    game.ui.surrenderArmedAt = performance.now();
     return;
   }
+  // 2e clic = confirmation
   game.ui.surrenderArmedAt = 0;
   const res = await window.RE_MP.surrender();
   if (res?.error) {
-    console.warn("[surrender]", res.error);
+    console.warn("[surrender] RPC failed:", res.error);
+    flashLobbyMessage(`Abandon impossible : ${res.error}`, "error");
+    // On déclenche quand même un game over local pour libérer le joueur
+    handleMpGameOver({ winnerSide: oppSide(), reason: "surrender" });
     return;
   }
-  // Le RPC marque le lobby finished. Le snapshot/gameover broadcast arrivera
-  // mais on déclenche aussi localement pour réactivité.
-  handleMpGameOver({ winnerSide: res.winnerSide || "enemy", reason: "surrender" });
+  handleMpGameOver({ winnerSide: res.winnerSide || oppSide(), reason: "surrender" });
 }
 
 function drawSettingsButton(ctx) {
@@ -6339,6 +6342,10 @@ function setupInput(canvas) {
     if (evt.key === "Escape" && game.lightningAiming) {
       game.lightningAiming = false;
     }
+    // Echap annule aussi un abandon armé (1er clic Abandonner)
+    if (evt.key === "Escape" && game.ui.surrenderArmedAt) {
+      game.ui.surrenderArmedAt = 0;
+    }
     // Scroll au clavier (flèches ← → ou A/D)
     const SCROLL_STEP = 120;
     const maxScroll = Math.max(0, CONFIG.W - CONFIG.CANVAS_W);
@@ -6638,6 +6645,7 @@ function goToMenu() {
   game.ui.chatMessages = [];
   game.ui.emoteMenuOpen = false;
   game.ui.emoteEvents = [];
+  game.ui.surrenderArmedAt = 0;
   // Reset des couleurs MP (le skin du peer pouvait avoir teinté enemy/player)
   COLORS.enemy = DEFAULT_ENEMY_COLOR;
   COLORS.enemyDark = DEFAULT_ENEMY_DARK;
