@@ -703,6 +703,17 @@ const SPRITE_FILES = [
   "factory-sniper-enemy",
   "factory-air-player",
   "factory-air-enemy",
+  // Tier II / III des factories (skins de fusion)
+  "factory-light-player-t2",   "factory-light-enemy-t2",
+  "factory-light-player-t3",   "factory-light-enemy-t3",
+  "factory-heavy-player-t2",   "factory-heavy-enemy-t2",
+  "factory-heavy-player-t3",   "factory-heavy-enemy-t3",
+  "factory-swarmer-player-t2", "factory-swarmer-enemy-t2",
+  "factory-swarmer-player-t3", "factory-swarmer-enemy-t3",
+  "factory-sniper-player-t2",  "factory-sniper-enemy-t2",
+  "factory-sniper-player-t3",  "factory-sniper-enemy-t3",
+  "factory-air-player-t2",     "factory-air-enemy-t2",
+  "factory-air-player-t3",     "factory-air-enemy-t3",
   "unit-light-player",
   "unit-light-enemy",
   "unit-heavy-player",
@@ -918,6 +929,12 @@ const BIOME_SPECIFIC_SPRITES = new Set([
   "unit-swarmer-enemy-t1", "unit-swarmer-enemy-t2",
   "unit-sniper-enemy-t1", "unit-sniper-enemy-t2",
   "unit-air-enemy-t1", "unit-air-enemy-t2",
+  // Factories T2/T3 enemy — biome-specific
+  "factory-light-enemy-t2", "factory-light-enemy-t3",
+  "factory-heavy-enemy-t2", "factory-heavy-enemy-t3",
+  "factory-swarmer-enemy-t2", "factory-swarmer-enemy-t3",
+  "factory-sniper-enemy-t2", "factory-sniper-enemy-t3",
+  "factory-air-enemy-t2", "factory-air-enemy-t3",
 ]);
 
 // Couleur du gradient peint sur le sol par biome (rgba semi-transparent).
@@ -2570,8 +2587,16 @@ function drawPreviewLineToGate(ctx, side, slot) {
 function drawFactory(ctx, slot, side) {
   const f = slot.factory;
   const type = FACTORY_TYPES[f.typeId];
-  const spriteName = `factory-${f.typeId}-${side}`;
   const inset = 3;
+  // Sprite spécifique au tier : T2/T3 ont leurs propres designs ("twin" et
+  // "mega") qui occupent visuellement 1×2 ou 2×2 slots. Fallback sur T1
+  // si le sprite tier n'est pas chargé.
+  const tierForSprite = f.tier || 1;
+  const baseSpriteName = `factory-${f.typeId}-${side}`;
+  const tieredSpriteName = tierForSprite > 1
+    ? `${baseSpriteName}-t${tierForSprite}`
+    : baseSpriteName;
+  const spriteName = sprites[tieredSpriteName] ? tieredSpriteName : baseSpriteName;
 
   // Boîte englobant tout le span de la factory (1 slot pour tier 1, 2 pour tier 2, 4 pour tier 3)
   const span = (f.spanSlots || []).map((idx) => game[side].slots[idx]).filter(Boolean);
