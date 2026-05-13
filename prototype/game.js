@@ -1430,7 +1430,12 @@ function buildHudButtons() {
 }
 
 function pointInRect(px, py, r) {
-  return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+  // Pad léger sur device tactile : compense l'imprécision du doigt sur les
+  // petits boutons (le visuel ne change pas, seulement la zone de hit).
+  // 6px tout autour ≈ 12px de zone élargie totale, suffisant pour un usage
+  // standard sans créer de conflits sérieux entre boutons adjacents.
+  const pad = (typeof IS_TOUCH !== "undefined" && IS_TOUCH) ? 6 : 0;
+  return px >= r.x - pad && px <= r.x + r.w + pad && py >= r.y - pad && py <= r.y + r.h + pad;
 }
 
 // -------------------------------------------------------------
@@ -3257,6 +3262,82 @@ function stopBackgroundSim() {
     clearInterval(_bgSimTimer);
     _bgSimTimer = null;
   }
+}
+
+// Bridge mobile : un input HTML invisible prend le focus quand on entre en
+// mode chat ou saisie de code lobby, ce qui fait apparaître le clavier
+// virtuel. À chaque saisie on copie sa valeur dans la bonne variable game.ui.
+// Sur desktop, IS_TOUCH=false → no-op.
+function setupMobileKeyboard() {
+  if (!IS_TOUCH) return;
+  const inp = document.getElementById("mobile-keyboard-proxy");
+  if (!inp) return;
+
+  let mode = null; // "chat" | "lobbyCode" | null
+
+  function refreshFocus() {
+    const wantChat = !!game.ui.chatActive && game.mode === "mp";
+    const wantLobbyCode = game.screen === "lobby"
+      && game.ui.lobbyPage === "join"
+      && !!game.ui.codeInputActive;
+    let want = null;
+    if (wantChat) want = "chat";
+    else if (wantLobbyCode) want = "lobbyCode";
+    if (want === mode) return;
+    mode = want;
+    if (mode === "chat") {
+      inp.value = game.ui.chatInput || "";
+      inp.maxLength = 240;
+      inp.setAttribute("inputmode", "text");
+      try { inp.focus({ preventScroll: true }); } catch { inp.focus(); }
+    } else if (mode === "lobbyCode") {
+      inp.value = game.ui.codeInput || "";
+      inp.maxLength = 6;
+      inp.setAttribute("inputmode", "text");
+      try { inp.focus({ preventScroll: true }); } catch { inp.focus(); }
+    } else {
+      inp.blur();
+      inp.value = "";
+    }
+  }
+
+  inp.addEventListener("input", () => {
+    if (mode === "chat") {
+      game.ui.chatInput = (inp.value || "").slice(0, 240);
+    } else if (mode === "lobbyCode") {
+      const filtered = (inp.value || "").replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 6);
+      if (filtered !== inp.value) inp.value = filtered;
+      game.ui.codeInput = filtered;
+      game.ui.codeInputError = null;
+    }
+  });
+
+  inp.addEventListener("keydown", (evt) => {
+    if (evt.key === "Enter") {
+      evt.preventDefault();
+      if (mode === "chat") {
+        sendCurrentChat();
+        // sendCurrentChat reset chatActive=false → refreshFocus va blur
+      } else if (mode === "lobbyCode") {
+        const code = (game.ui.codeInput || "").trim();
+        if (code.length >= 4) {
+          game.ui.codeInputActive = false;
+          mpJoinByCode(code);
+        }
+      }
+    }
+  });
+
+  inp.addEventListener("blur", () => {
+    // L'utilisateur a fermé le clavier (back Android, tap canvas, etc.).
+    // On reflète l'intention dans le state pour rester cohérent.
+    if (mode === "chat") game.ui.chatActive = false;
+    if (mode === "lobbyCode") game.ui.codeInputActive = false;
+    mode = null;
+  });
+
+  // Poll léger pour synchroniser focus/blur avec l'état du jeu.
+  setInterval(refreshFocus, 150);
 }
 
 function setupBackgroundSimLoop() {
@@ -7474,6 +7555,7 @@ function setupInput(canvas) {
       } else if (page === "join") {
         if (lr.joinOk && pointInRect(sx, sy, lr.joinOk)) {
           audio.playSFX("click");
+          game.ui.codeInputActive = false;
           mpJoinByCode(game.ui.codeInput);
           return;
         }
@@ -7481,8 +7563,16 @@ function setupInput(canvas) {
           audio.playSFX("click");
           game.ui.lobbyPage = "choice";
           game.ui.codeInputError = null;
+          game.ui.codeInputActive = false;
           return;
         }
+        if (lr.joinInput && pointInRect(sx, sy, lr.joinInput)) {
+          // Tap sur le champ code → ouvre le clavier virtuel sur mobile
+          game.ui.codeInputActive = true;
+          return;
+        }
+        // Tap ailleurs → ferme le clavier virtuel
+        game.ui.codeInputActive = false;
       } else if (page === "room") {
         if (lr.chatInput && pointInRect(sx, sy, lr.chatInput)) {
           game.ui.chatActive = true;
@@ -8092,6 +8182,19 @@ function setupInput(canvas) {
     game.ui.mouseScreen.x = pos.x;
     game.ui.mouseScreen.y = pos.y;
     game.ui.mouseInside = true;
+    // Détection drag slider (settings audio ouvert)
+    if (game.ui.settingsOpen && game.ui.settingsRects) {
+      const sr = game.ui.settingsRects;
+      if (pointInRect(pos.x, pos.y, sr.musicSlider)) {
+        game.ui.draggingSlider = "music";
+        const v = Math.max(0, Math.min(1, (pos.x - sr.musicSlider.x) / sr.musicSlider.w));
+        audio.setMusicVolume(v);
+      } else if (pointInRect(pos.x, pos.y, sr.sfxSlider)) {
+        game.ui.draggingSlider = "sfx";
+        const v = Math.max(0, Math.min(1, (pos.x - sr.sfxSlider.x) / sr.sfxSlider.w));
+        audio.setSfxVolume(v);
+      }
+    }
   }, { passive: false });
 
   canvas.addEventListener("touchmove", (evt) => {
@@ -8099,13 +8202,23 @@ function setupInput(canvas) {
     evt.preventDefault();
     const t = evt.touches[0];
     const pos = canvasCoordsFromEvent(canvas, t);
+    // Drag slider en cours : prio absolue
+    if (game.ui.draggingSlider && game.ui.settingsRects) {
+      const sr = game.ui.settingsRects;
+      const slider = game.ui.draggingSlider === "music" ? sr.musicSlider : sr.sfxSlider;
+      const v = Math.max(0, Math.min(1, (pos.x - slider.x) / slider.w));
+      if (game.ui.draggingSlider === "music") audio.setMusicVolume(v);
+      else audio.setSfxVolume(v);
+      game.ui.mouseScreen.x = pos.x;
+      game.ui.mouseScreen.y = pos.y;
+      return;
+    }
     const dx = pos.x - touchStart.x;
     const dy = pos.y - touchStart.y;
     if (Math.hypot(dx, dy) > TOUCH_PAN_THRESHOLD && touchStart.panAllowed) {
       touchPanned = true;
     }
     if (touchPanned) {
-      // Doigt vers la gauche → caméra avance vers la droite
       const maxScroll = Math.max(0, CONFIG.W - CONFIG.CANVAS_W);
       let nx = touchStart.camX - dx;
       if (nx < 0) nx = 0;
@@ -8114,7 +8227,6 @@ function setupInput(canvas) {
       game.ui.hoverSlot = null;
       game.ui.hoverUnit = null;
     } else {
-      // Pas (encore) en pan : on suit le doigt comme un curseur
       game.ui.mouseScreen.x = pos.x;
       game.ui.mouseScreen.y = pos.y;
     }
@@ -8123,10 +8235,15 @@ function setupInput(canvas) {
   canvas.addEventListener("touchend", (evt) => {
     if (!touchStart) return;
     evt.preventDefault();
+    // Si on était en train de drag un slider, on save et on shortcut
+    if (game.ui.draggingSlider) {
+      saveSettings();
+      game.ui.draggingSlider = null;
+      touchStart = null;
+      touchPanned = false;
+      return;
+    }
     if (!touchPanned) {
-      // Tap court : on dispatche un click synthétique au point d'origine,
-      // ce qui déclenche tous les handlers click déjà branchés (boutons,
-      // build, lightning aim, etc.). On utilise les coords écran initiales.
       const rect = canvas.getBoundingClientRect();
       const clientX = touchStart.x * (rect.width / canvas.width) + rect.left;
       const clientY = touchStart.y * (rect.height / canvas.height) + rect.top;
@@ -8134,11 +8251,13 @@ function setupInput(canvas) {
     }
     touchStart = null;
     touchPanned = false;
-    // Sur touch on n'a pas de "leave" naturel — on garde mouseInside true
-    // pour que les handlers continuent à recevoir les positions de tap.
   }, { passive: false });
 
   canvas.addEventListener("touchcancel", () => {
+    if (game.ui.draggingSlider) {
+      saveSettings();
+      game.ui.draggingSlider = null;
+    }
     touchStart = null;
     touchPanned = false;
   }, { passive: false });
@@ -10087,6 +10206,7 @@ async function boot() {
   // On simule à 20 Hz sans rendu — le rendu reprend dès que la page est
   // visible (le RAF redémarre automatiquement).
   setupBackgroundSimLoop();
+  setupMobileKeyboard();
 
   // ?invite=CODE → auto-flow vers le rejoindre MP avec le code prérempli
   try {
