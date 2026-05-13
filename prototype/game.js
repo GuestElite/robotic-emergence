@@ -89,53 +89,52 @@ const FACTORY_TYPES = {
   sniper: {
     id: "sniper",
     label: "Sniper",
-    cost: 130,           // baissé (était 150)
-    prodInterval: 5.0,   // un peu plus rapide à produire (était 5.5)
+    cost: 130,
+    prodInterval: 5.0,
     hp: 150,
     unitType: "sniper",
+  },
+  air: {
+    id: "air",
+    label: "Aérienne",
+    cost: 180,
+    prodInterval: 3.2,
+    hp: 130,
+    unitType: "air",
   },
 };
 
 const UNIT_TYPES = {
   light: {
     id: "light",
-    hp: 30,
-    damage: 10,
-    speed: 90,
-    radius: 8,
-    range: 55,
-    attackInterval: 0.7,
-    killReward: 10,
+    hp: 30, damage: 10, speed: 90, radius: 8,
+    range: 55, attackInterval: 0.7, killReward: 10,
+    layer: "ground", canTargetAir: false,
   },
   heavy: {
     id: "heavy",
-    hp: 80,
-    damage: 25,
-    speed: 50,
-    radius: 12,
-    range: 65,
-    attackInterval: 1.5,
-    killReward: 25,
+    hp: 80, damage: 25, speed: 50, radius: 12,
+    range: 65, attackInterval: 1.5, killReward: 25,
+    layer: "ground", canTargetAir: false,
   },
   swarmer: {
     id: "swarmer",
-    hp: 18,             // légère boost (était 15) pour ne pas mourir d'un seul tir
-    damage: 4,          // DPS réduit (était 6) — comptabilise via volume
-    speed: 135,         // toujours le plus rapide
-    radius: 6,
-    range: 35,
-    attackInterval: 0.45,
-    killReward: 5,      // récompense légèrement réduite (cible facile)
+    hp: 18, damage: 4, speed: 135, radius: 6,
+    range: 35, attackInterval: 0.45, killReward: 5,
+    layer: "ground", canTargetAir: false,
   },
   sniper: {
     id: "sniper",
-    hp: 55,             // un peu plus de PV (était 50)
-    damage: 35,         // DPS toujours élevé (était 40) — équilibré avec cadence
-    speed: 50,          // moins lent (était 35)
-    radius: 10,
-    range: 145,         // longue portée
-    attackInterval: 2.0, // cadence améliorée (était 2.5)
-    killReward: 28,
+    hp: 55, damage: 35, speed: 50, radius: 10,
+    range: 145, attackInterval: 2.0, killReward: 28,
+    layer: "ground", canTargetAir: true, // SEUL ground qui peut viser l'air
+  },
+  air: {
+    id: "air",
+    hp: 45, damage: 14, speed: 110, radius: 9,
+    range: 75, attackInterval: 1.0, killReward: 30,
+    layer: "air",
+    canTargetAir: true, // les drones peuvent tirer sur tout : sol + air
   },
 };
 
@@ -209,6 +208,9 @@ function spawnStatsFor(factory) {
     radius:         ut.radius,
     attackInterval: ut.attackInterval / statMultiplier(u.shootRate, 0.18),
     killReward:     ut.killReward,
+    // Layer + capacités anti-air (sniper et air)
+    layer:          ut.layer || "ground",
+    canTargetAir:   !!ut.canTargetAir,
   };
 }
 
@@ -220,7 +222,7 @@ function spawnStatsFor(factory) {
 const AI_CONFIG = {
   buildInterval: 5.0,
   firstBuildDelay: 2,
-  typeWeights: { light: 35, heavy: 25, swarmer: 25, sniper: 15 },
+  typeWeights: { light: 30, heavy: 22, swarmer: 22, sniper: 14, air: 12 },
 };
 
 // -------------------------------------------------------------
@@ -234,7 +236,7 @@ const DIFFICULTY_PRESETS = {
     aiBuildInterval: 7.5,
     aiStartMoney: 60,
     aiHeavyChance: 0.15,
-    aiTypeWeights: { light: 45, heavy: 20, swarmer: 25, sniper: 10 },
+    aiTypeWeights: { light: 42, heavy: 18, swarmer: 22, sniper: 10, air: 8 },
     playerStartMoney: 150,
     playerBaseHP: 1500,
     enemyBaseHP: 700,
@@ -247,7 +249,7 @@ const DIFFICULTY_PRESETS = {
     aiBuildInterval: 5.0,
     aiStartMoney: 100,
     aiHeavyChance: 0.30,
-    aiTypeWeights: { light: 35, heavy: 25, swarmer: 25, sniper: 15 },
+    aiTypeWeights: { light: 30, heavy: 22, swarmer: 22, sniper: 14, air: 12 },
     playerStartMoney: 100,
     playerBaseHP: 1000,
     enemyBaseHP: 1000,
@@ -260,7 +262,7 @@ const DIFFICULTY_PRESETS = {
     aiBuildInterval: 3.5,
     aiStartMoney: 150,
     aiHeavyChance: 0.45,
-    aiTypeWeights: { light: 25, heavy: 30, swarmer: 25, sniper: 20 },
+    aiTypeWeights: { light: 22, heavy: 26, swarmer: 22, sniper: 14, air: 16 },
     playerStartMoney: 80,
     playerBaseHP: 700,
     enemyBaseHP: 1500,
@@ -606,8 +608,8 @@ function makeStats() {
     damageTaken: 0,
     borderHits: 0,
     lightningsUsed: 0,
-    factoriesBuiltByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0 },
-    unitsSpawnedByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0 },
+    factoriesBuiltByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0, air: 0 },
+    unitsSpawnedByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0, air: 0 },
   };
 }
 
@@ -908,10 +910,10 @@ function getPathCenterY() {
 // -------------------------------------------------------------
 
 function buildHudButtons() {
-  // 5 boutons de construction côte à côte (raccourcis 1-5)
-  const types = ["light", "heavy", "swarmer", "sniper", "turret"];
+  // 6 boutons (raccourcis 1-6) — turret en dernier (placement sur le mur, pas sur la grille)
+  const types = ["light", "heavy", "swarmer", "sniper", "air", "turret"];
   const startX = 130;
-  const btnW = 116;
+  const btnW = 100;
   const btnGap = 4;
   game.ui.buttons = types.map((t, i) => ({
     id: `build-${t}`,
@@ -1038,6 +1040,8 @@ function spawnUnitFromFactory(side, slot) {
   const spawnY = slot.y + slot.size / 2;
 
   const typeId = FACTORY_TYPES[factory.typeId].unitType;
+  // Les unités aériennes survolent les murs : aucun waypoint interne, elles partent direct
+  const isAir = stats.layer === "air";
   game.units.push({
     side,
     typeId,
@@ -1053,7 +1057,7 @@ function spawnUnitFromFactory(side, slot) {
     wanderY: null,
     wanderTimer: 0,
     mode: factory.mode || "attack",
-    exitWaypoints: buildInternalWaypoints(side, slot, gateRow),
+    exitWaypoints: isAir ? [] : buildInternalWaypoints(side, slot, gateRow),
   });
   game.stats[side].unitsSpawned++;
   if (game.stats[side].unitsSpawnedByType[typeId] != null) {
@@ -1110,6 +1114,15 @@ function targetIsAlive(target) {
 // Cible : SEULEMENT les unités ennemies à portée. Pas de fallback "base"
 // — quand aucune cible n'est en range, l'unité avance tout droit vers la base ennemie
 // pour s'y faire exploser à la frontière (cf. updateUnits).
+function canEngage(attacker, target) {
+  // L'air est intouchable par les unités ground sans canTargetAir
+  if (target.stats && target.stats.layer === "air") {
+    return !!attacker.stats?.canTargetAir;
+  }
+  // Sol : toutes les unités peuvent attaquer (sniper et air aussi)
+  return true;
+}
+
 function findTargetFor(u) {
   const enemySide = u.side === "player" ? "enemy" : "player";
   const isDef = u.mode === "defense";
@@ -1118,22 +1131,19 @@ function findTargetFor(u) {
   let bestDist = Infinity;
   for (const other of game.units) {
     if (other.side !== enemySide || other.hp <= 0) continue;
+    if (!canEngage(u, other)) continue;
     const d = dist(u.x, u.y, other.x, other.y);
 
-    // Cas 1 : ennemi déjà à portée de tir → cible directe (priorité absolue)
     if (d <= u.stats.range) {
       if (d < bestDist) { best = other; bestDist = d; }
       continue;
     }
 
-    // Cas 2 : auto-interception — toute unité alliée vise les menaces proches de SA base
     if (isThreateningOwnBase(other, u.side) && d <= DEFENSE_DETECTION_RANGE) {
       if (d < bestDist) { best = other; bestDist = d; }
       continue;
     }
 
-    // Cas 3 : mode défense — détecte aussi les ennemis dans le rayon élargi
-    // (même hors de la zone de défense, pour aller à la rencontre)
     if (isDef && d <= DEFENSE_DETECTION_RANGE) {
       if (d < bestDist) { best = other; bestDist = d; }
     }
@@ -2016,6 +2026,32 @@ function drawFactoryPlaceholder(ctx, typeId, side, x, y, w, h) {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("S", cx, cy);
+  } else if (typeId === "air") {
+    // Héliport : plateforme circulaire avec H au centre + lumières clignotantes
+    ctx.fillStyle = main;
+    ctx.fillRect(x + 4, y + h - 14, w - 8, 12);
+    // Plateforme cercle
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(cx, cy - 2, w * 0.32, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // Lettre H
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 13px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("H", cx, cy - 2);
+    // Petites lumières (4 coins)
+    const pulse = (Math.sin((game.time || 0) * 6) + 1) / 2;
+    ctx.fillStyle = `rgba(251, 191, 36, ${0.4 + pulse * 0.6})`;
+    [[-w*0.35,-h*0.20],[w*0.35,-h*0.20],[-w*0.35,h*0.30],[w*0.35,h*0.30]].forEach(([dx, dy]) => {
+      ctx.beginPath();
+      ctx.arc(cx + dx, cy + dy, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    });
   } else if (typeId === "sniper") {
     // Tour effilée + scope au sommet
     ctx.fillStyle = main;
@@ -2224,6 +2260,60 @@ function drawUnitPlaceholder(ctx, u, radius) {
     ctx.fillStyle = u.attackCooldown > 0 ? "#fbbf24" : "#22c55e";
     ctx.beginPath();
     ctx.arc(u.x, u.y - 8, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  if (u.typeId === "air") {
+    // Drone aérien : ombre projetée au sol + corps qui flotte + 4 rotors
+    const bob = Math.sin((game.time || 0) * 4 + u.x * 0.02) * 2.5;
+    const flyOffset = -16 + bob; // hauteur de vol (vers le haut)
+    const cx = u.x;
+    const cy = u.y + flyOffset;
+
+    // Ombre au sol (à la position "ground" = u.y, transparente)
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.ellipse(u.x, u.y + 4, radius * 1.1, radius * 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // 4 bras + rotors
+    ctx.strokeStyle = dark;
+    ctx.lineWidth = 1.5;
+    const armLen = radius * 1.3;
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + (Math.PI / 2) * i;
+      const rx = cx + Math.cos(a) * armLen;
+      const ry = cy + Math.sin(a) * armLen;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(rx, ry);
+      ctx.stroke();
+      // Rotor (cercle flou)
+      ctx.fillStyle = "rgba(200, 220, 255, 0.55)";
+      ctx.beginPath();
+      ctx.arc(rx, ry, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    }
+    // Corps central
+    ctx.fillStyle = main;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * 0.65, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = dark;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    // LED frontale (clignote)
+    const blink = (Math.sin((game.time || 0) * 8) + 1) / 2;
+    ctx.fillStyle = `rgba(34, 197, 94, ${0.5 + blink * 0.5})`;
+    ctx.beginPath();
+    ctx.arc(cx + fwd * radius * 0.4, cy, 1.6, 0, Math.PI * 2);
     ctx.fill();
     return;
   }
@@ -3486,11 +3576,12 @@ function drawHUD(ctx) {
 }
 
 function drawBuildButtons(ctx) {
+  const ICONS = { light: "🏭", heavy: "🏭", swarmer: "🏭", sniper: "🏭", air: "✈️", turret: "🗼" };
   for (const btn of game.ui.buttons) {
     const isTurret = btn.type === "turret";
     const cost = isTurret ? TURRET_TYPE.cost : FACTORY_TYPES[btn.type].cost;
     const label = isTurret ? "Turret" : FACTORY_TYPES[btn.type].label;
-    const icon = isTurret ? "🗼" : "🏭";
+    const icon = ICONS[btn.type] || "🏭";
 
     const isActive = game.ui.selectedBuildType === btn.type;
     const canAfford = game.player.money >= cost;
@@ -3523,7 +3614,7 @@ function drawBuildButtons(ctx) {
 }
 
 function drawSettingsButton(ctx) {
-  const btnX = 130 + 5 * (116 + 4) + 12 + 110 + 10;
+  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 10;
   const btnY = 12;
   const btnW = 36;
   const btnH = 36;
@@ -3716,7 +3807,7 @@ function drawAudioSlider(ctx, x, y, width, value, enabled) {
 function drawLightningButton(ctx) {
   const btnW = 110;
   const btnH = 36;
-  const btnX = 130 + 5 * (116 + 4) + 12;
+  const btnX = 130 + 6 * (100 + 4) + 12;
   const btnY = 12;
   game.ui.lightningBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
 
@@ -4156,7 +4247,7 @@ function setupInput(canvas) {
         game.ui.upgradePanel = null;
       }
     }
-    const keyMap = { "1": "light", "2": "heavy", "3": "swarmer", "4": "sniper", "5": "turret" };
+    const keyMap = { "1": "light", "2": "heavy", "3": "swarmer", "4": "sniper", "5": "air", "6": "turret" };
     if (keyMap[evt.key]) {
       const t = keyMap[evt.key];
       game.ui.selectedBuildType = game.ui.selectedBuildType === t ? null : t;
