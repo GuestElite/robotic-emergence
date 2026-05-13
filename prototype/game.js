@@ -672,23 +672,36 @@ const PROP_TYPES = {
 
 // Positions fixes (déterministes pour V1). x/y = pied du prop dans le monde.
 // Le monde fait 2000 × 720, bases ~280 px à gauche/droite, battlefield ~320..1720.
-// Disposition : variation top/bot, éparpillée, jamais sur les voies du milieu.
+// Disposition : 22 props éparpillés, variation haut/milieu-extérieur/bas,
+// jamais sur les voies du milieu (Y ≈ 156/300/444 pour PATH_ROWS [2,5,8]).
 const PROP_POSITIONS = [
-  // Haut du terrain (Y 110-220)
-  { type: "rock-big",   x: 420,  y: 130 },
-  { type: "cactus",     x: 720,  y: 165 },
-  { type: "grass-tuft", x: 500,  y: 200 },
-  { type: "rock-small", x: 1180, y: 145 },
-  { type: "dry-brush",  x: 1450, y: 180 },
-  { type: "rock-big",   x: 980,  y: 220 },
-  // Bas du terrain (Y 500-680)
-  { type: "cactus",     x: 480,  y: 560 },
-  { type: "rock-small", x: 850,  y: 605 },
-  { type: "dry-brush",  x: 1100, y: 545 },
-  { type: "rock-big",   x: 1350, y: 590 },
-  { type: "grass-tuft", x: 1550, y: 540 },
-  { type: "rock-small", x: 1620, y: 660 },
-  { type: "cactus",     x: 350,  y: 660 },
+  // === Bande supérieure (Y 100-150) — au-dessus du gate du haut ===
+  { type: "rock-big",   x: 380,  y: 115 },
+  { type: "grass-tuft", x: 510,  y: 105 },
+  { type: "cactus",     x: 640,  y: 130 },
+  { type: "rock-small", x: 770,  y: 110 },
+  { type: "dry-brush",  x: 910,  y: 125 },
+  { type: "rock-big",   x: 1090, y: 138 },
+  { type: "grass-tuft", x: 1230, y: 108 },
+  { type: "cactus",     x: 1380, y: 145 },
+  { type: "rock-small", x: 1530, y: 118 },
+  { type: "dry-brush",  x: 1660, y: 132 },
+
+  // === Bandes intermédiaires entre les voies (Y 220-280 et Y 360-410) ===
+  { type: "rock-small", x: 420,  y: 250 },
+  { type: "grass-tuft", x: 1180, y: 235 },
+  { type: "rock-big",   x: 1480, y: 385 },
+  { type: "dry-brush",  x: 600,  y: 395 },
+  { type: "cactus",     x: 880,  y: 405 },
+
+  // === Bande inférieure (Y 500-690) — sous le gate du bas ===
+  { type: "rock-big",   x: 420,  y: 535 },
+  { type: "cactus",     x: 590,  y: 600 },
+  { type: "dry-brush",  x: 760,  y: 560 },
+  { type: "rock-small", x: 920,  y: 640 },
+  { type: "grass-tuft", x: 1080, y: 595 },
+  { type: "rock-big",   x: 1300, y: 555 },
+  { type: "rock-small", x: 1620, y: 650 },
 ];
 
 const sprites = {};
@@ -1668,6 +1681,7 @@ function gameLoop(timestamp) {
 // -------------------------------------------------------------
 
 function drawGround(ctx) {
+  // 1) Tile-ground (texture grain sable, tileable, couleur uniforme)
   if (sprites["tile-ground"]) {
     const tile = sprites["tile-ground"];
     const tileSize = 128;
@@ -1677,17 +1691,22 @@ function drawGround(ctx) {
       }
     }
   } else {
-    const tileSize = 64;
-    for (let y = CONFIG.HUD_H; y < CONFIG.H; y += tileSize) {
-      for (let x = 0; x < CONFIG.W; x += tileSize) {
-        ctx.fillStyle =
-          ((x / tileSize + y / tileSize) | 0) % 2 === 0
-            ? COLORS.ground
-            : COLORS.groundDark;
-        ctx.fillRect(x, y, tileSize, tileSize);
-      }
-    }
+    // Fallback : couleur unie
+    ctx.fillStyle = COLORS.ground;
+    ctx.fillRect(0, CONFIG.HUD_H, CONFIG.W, CONFIG.H - CONFIG.HUD_H);
   }
+
+  // 2) Overlay gradient vertical peint EN UNE SEULE FOIS sur toute la map
+  //    (transparent en haut → sombre en bas). Couvre l'intégralité du
+  //    battlefield d'un coup → ZÉRO bande horizontale liée au tilage.
+  const top = CONFIG.HUD_H;
+  const bot = CONFIG.H;
+  const grad = ctx.createLinearGradient(0, top, 0, bot);
+  grad.addColorStop(0,    "rgba(0, 0, 0, 0.00)");
+  grad.addColorStop(0.5,  "rgba(80, 50, 25, 0.06)");
+  grad.addColorStop(1,    "rgba(80, 50, 25, 0.22)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, top, CONFIG.W, bot - top);
 }
 
 function drawBattlefieldLane(ctx) {
