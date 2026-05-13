@@ -9,10 +9,10 @@ const CONFIG = {
   H: 720,          // hauteur (pas de scroll vertical)
   HUD_H: 60,
   BASE_W: 280,
-  BASE_HP_MAX: 1000,
-  START_MONEY: 100,
-  CAMERA_SCROLL_MARGIN: 80,   // px du bord déclenchant le scroll auto
-  CAMERA_SCROLL_SPEED: 650,   // px/sec à pleine vitesse
+  BASE_HP_MAX: 1000,           // overridé par game.preset au démarrage
+  START_MONEY: 100,            // overridé par game.preset
+  CAMERA_SCROLL_MARGIN: 80,
+  CAMERA_SCROLL_SPEED: 650,
   // Grille étendue : occupe toute la base. Les rangées PATH_ROWS et la colonne PATH_COL
   // forment une croix multi-bras non-constructible, et chaque rangée mène à son propre gate.
   GRID_COLS: 5,
@@ -212,12 +212,260 @@ function spawnStatsFor(factory) {
 // IA ennemie (V0 — timer simple, pas de stratégie complexe)
 // -------------------------------------------------------------
 
+// Valeurs par défaut — écrasées par game.preset au démarrage de partie
 const AI_CONFIG = {
   buildInterval: 5.0,
   firstBuildDelay: 2,
-  // Pondérations de choix de factory (normalisées au runtime)
   typeWeights: { light: 35, heavy: 25, swarmer: 25, sniper: 15 },
 };
+
+// -------------------------------------------------------------
+// Présets de difficulté
+// -------------------------------------------------------------
+const DIFFICULTY_PRESETS = {
+  easy: {
+    label: "Facile",
+    emoji: "🟢",
+    desc: "L'IA construit lentement, tu démarres avec plus d'argent et de PV",
+    aiBuildInterval: 7.5,
+    aiStartMoney: 60,
+    aiHeavyChance: 0.15,
+    aiTypeWeights: { light: 45, heavy: 20, swarmer: 25, sniper: 10 },
+    playerStartMoney: 150,
+    playerBaseHP: 1500,
+    enemyBaseHP: 700,
+    aiDefenseChance: 0.15,
+  },
+  normal: {
+    label: "Normal",
+    emoji: "🟡",
+    desc: "Équilibré — l'expérience pensée par défaut",
+    aiBuildInterval: 5.0,
+    aiStartMoney: 100,
+    aiHeavyChance: 0.30,
+    aiTypeWeights: { light: 35, heavy: 25, swarmer: 25, sniper: 15 },
+    playerStartMoney: 100,
+    playerBaseHP: 1000,
+    enemyBaseHP: 1000,
+    aiDefenseChance: 0.25,
+  },
+  hard: {
+    label: "Difficile",
+    emoji: "🔴",
+    desc: "L'IA spam, plus de PV, tu démarres handicapé",
+    aiBuildInterval: 3.5,
+    aiStartMoney: 150,
+    aiHeavyChance: 0.45,
+    aiTypeWeights: { light: 25, heavy: 30, swarmer: 25, sniper: 20 },
+    playerStartMoney: 80,
+    playerBaseHP: 700,
+    enemyBaseHP: 1500,
+    aiDefenseChance: 0.35,
+  },
+};
+
+// -------------------------------------------------------------
+// Audio (Web Audio API — pas de fichier à charger, tout est synthétisé)
+// -------------------------------------------------------------
+const audio = {
+  ctx: null,
+  musicEnabled: true,
+  sfxEnabled: true,
+  musicMaster: null,   // GainNode pour la musique
+  musicNodes: [],      // oscillators de la musique
+  lastSfxTime: {},     // throttle par type de SFX
+  ensureCtx() {
+    if (!this.ctx) {
+      try {
+        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      } catch (e) {
+        console.warn("[Audio] Web Audio API indisponible :", e);
+      }
+    }
+    if (this.ctx && this.ctx.state === "suspended") {
+      this.ctx.resume().catch(() => {});
+    }
+    return this.ctx;
+  },
+  playSFX(type) {
+    if (!this.sfxEnabled) return;
+    const ctx = this.ensureCtx();
+    if (!ctx) return;
+    // Throttle : pas plus d'un même SFX par 60ms (sauf cas critique)
+    const now = ctx.currentTime;
+    const minGap = type === "explosion" ? 0.18 : 0.06;
+    if (this.lastSfxTime[type] && now - this.lastSfxTime[type] < minGap) return;
+    this.lastSfxTime[type] = now;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain).connect(ctx.destination);
+
+    switch (type) {
+      case "shot": {
+        osc.type = "square";
+        osc.frequency.setValueAtTime(900, now);
+        osc.frequency.exponentialRampToValueAtTime(400, now + 0.05);
+        gain.gain.setValueAtTime(0.04, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+        osc.start(now);
+        osc.stop(now + 0.07);
+        break;
+      }
+      case "explosion": {
+        // Bruit blanc burst via plusieurs oscillators
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(120, now);
+        osc.frequency.exponentialRampToValueAtTime(40, now + 0.3);
+        gain.gain.setValueAtTime(0.18, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+        osc.start(now);
+        osc.stop(now + 0.32);
+        break;
+      }
+      case "place": {
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(440, now);
+        osc.frequency.linearRampToValueAtTime(880, now + 0.12);
+        gain.gain.setValueAtTime(0.09, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+        osc.start(now);
+        osc.stop(now + 0.16);
+        break;
+      }
+      case "upgrade": {
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(660, now);
+        osc.frequency.linearRampToValueAtTime(990, now + 0.16);
+        gain.gain.setValueAtTime(0.07, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+        osc.start(now);
+        osc.stop(now + 0.2);
+        break;
+      }
+      case "sell": {
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(550, now);
+        osc.frequency.linearRampToValueAtTime(220, now + 0.18);
+        gain.gain.setValueAtTime(0.07, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        osc.start(now);
+        osc.stop(now + 0.22);
+        break;
+      }
+      case "click": {
+        osc.type = "square";
+        osc.frequency.setValueAtTime(1200, now);
+        gain.gain.setValueAtTime(0.04, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+        osc.start(now);
+        osc.stop(now + 0.05);
+        break;
+      }
+      case "win":
+      case "lose": {
+        osc.type = "sawtooth";
+        if (type === "win") {
+          osc.frequency.setValueAtTime(330, now);
+          osc.frequency.linearRampToValueAtTime(660, now + 0.5);
+        } else {
+          osc.frequency.setValueAtTime(330, now);
+          osc.frequency.linearRampToValueAtTime(110, now + 0.6);
+        }
+        gain.gain.setValueAtTime(0.14, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+        osc.start(now);
+        osc.stop(now + 0.75);
+        break;
+      }
+    }
+  },
+  startMusic() {
+    if (!this.musicEnabled || this.musicNodes.length > 0) return;
+    const ctx = this.ensureCtx();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0, now);
+    master.gain.linearRampToValueAtTime(0.06, now + 1.5);
+    master.connect(ctx.destination);
+    this.musicMaster = master;
+
+    // Drone à 3 voix (do — sol — mi) avec léger détune
+    const freqs = [110, 165, 220];
+    for (const f of freqs) {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sawtooth";
+      o.frequency.setValueAtTime(f, now);
+      // LFO sur la fréquence pour donner un peu de vie
+      const lfo = ctx.createOscillator();
+      const lfoGain = ctx.createGain();
+      lfo.frequency.setValueAtTime(0.15 + Math.random() * 0.2, now);
+      lfoGain.gain.setValueAtTime(2.5, now);
+      lfo.connect(lfoGain).connect(o.frequency);
+      g.gain.setValueAtTime(0.5, now);
+      // Filtre passe-bas pour adoucir
+      const filter = ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(600, now);
+      o.connect(filter).connect(g).connect(master);
+      o.start(now);
+      lfo.start(now);
+      this.musicNodes.push(o, lfo);
+    }
+  },
+  stopMusic() {
+    if (!this.musicMaster) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    this.musicMaster.gain.cancelScheduledValues(now);
+    this.musicMaster.gain.setValueAtTime(this.musicMaster.gain.value, now);
+    this.musicMaster.gain.linearRampToValueAtTime(0.0001, now + 0.5);
+    setTimeout(() => {
+      for (const n of this.musicNodes) {
+        try { n.stop(); } catch (_) {}
+      }
+      this.musicNodes = [];
+      this.musicMaster = null;
+    }, 600);
+  },
+  setMusicEnabled(on) {
+    this.musicEnabled = on;
+    if (on && game.screen === "playing") this.startMusic();
+    else this.stopMusic();
+  },
+  setSfxEnabled(on) { this.sfxEnabled = on; },
+};
+
+// -------------------------------------------------------------
+// Persistance settings (localStorage)
+// -------------------------------------------------------------
+const SETTINGS_KEY = "robotic-emergence-settings-v1";
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (s.difficulty && DIFFICULTY_PRESETS[s.difficulty]) {
+      game.difficulty = s.difficulty;
+      game.preset = DIFFICULTY_PRESETS[s.difficulty];
+    }
+    if (typeof s.musicEnabled === "boolean") audio.musicEnabled = s.musicEnabled;
+    if (typeof s.sfxEnabled === "boolean") audio.sfxEnabled = s.sfxEnabled;
+  } catch (_) {}
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      difficulty: game.difficulty,
+      musicEnabled: audio.musicEnabled,
+      sfxEnabled: audio.sfxEnabled,
+    }));
+  } catch (_) {}
+}
 
 // -------------------------------------------------------------
 // État global du jeu
@@ -226,35 +474,43 @@ const AI_CONFIG = {
 const game = {
   time: 0,
   lastTimestamp: 0,
-  player: makeSideState("player"),
-  enemy: makeSideState("enemy"),
+  screen: "menu",                 // "menu" | "playing" | "gameOver"
+  difficulty: "normal",           // "easy" | "normal" | "hard"
+  preset: DIFFICULTY_PRESETS.normal,
+  player: null,                   // initialisé au lancement de partie
+  enemy: null,
   units: [],
   attackFx: [],
   explosions: [],
   gameOver: null,
-  camera: { x: 0 }, // décalage horizontal du viewport sur le monde (0 → vue ancrée à gauche)
+  camera: { x: 0 },
   ui: {
     selectedBuildType: null,
     hoverSlot: null,
-    mouse: { x: 0, y: 0 },         // coordonnées MONDE (utilisées pour hover slots/factories)
-    mouseScreen: { x: 0, y: 0 },   // coordonnées CANVAS (HUD, panneau, détection de scroll)
-    mouseInside: false,            // vrai si le curseur est sur le canvas
+    mouse: { x: 0, y: 0 },
+    mouseScreen: { x: 0, y: 0 },
+    mouseInside: false,
     buttons: [],
     replayBtn: null,
     upgradePanel: null,
     panelRects: null,
+    menuRects: null,              // rects cliquables du menu d'accueil
+    gameOverMenuBtn: null,
   },
 };
 
 function makeSideState(side) {
+  const preset = game.preset;
+  const startMoney = side === "player" ? preset.playerStartMoney : preset.aiStartMoney;
+  const baseHP = side === "player" ? preset.playerBaseHP : preset.enemyBaseHP;
   return {
     side,
-    money: CONFIG.START_MONEY,
-    baseHP: CONFIG.BASE_HP_MAX,
+    money: startMoney,
+    baseHP,
+    baseHPMax: baseHP,
     slots: [],
-    // L'IA ennemie démarre son timer en avance pour construire ~2s après le start
     buildTimer: side === "enemy"
-      ? AI_CONFIG.buildInterval - AI_CONFIG.firstBuildDelay
+      ? preset.aiBuildInterval - AI_CONFIG.firstBuildDelay
       : 0,
   };
 }
@@ -440,8 +696,9 @@ function tryPlaceFactory(side, slotIndex, typeId) {
     level: 1,
     upgrades: defaultUpgrades(),
     totalInvested: type.cost,
-    mode: "attack", // "attack" | "defense" — toggleable depuis le panneau d'upgrade
+    mode: "attack",
   };
+  audio.playSFX("place");
   return true;
 }
 
@@ -459,6 +716,7 @@ function tryUpgradeFactory(side, slotIndex, statId) {
   state.money -= cost;
   slot.factory.upgrades[statId] = lvl + 1;
   slot.factory.totalInvested += cost;
+  audio.playSFX("upgrade");
   return true;
 }
 
@@ -470,6 +728,7 @@ function sellFactory(side, slotIndex) {
   const refund = Math.floor(slot.factory.totalInvested * SELL_RATIO);
   state.money += refund;
   slot.factory = null;
+  audio.playSFX("sell");
   return refund;
 }
 
@@ -607,6 +866,7 @@ function applyDamage(target, amount, attacker) {
 
 function spawnExplosion(x, y, side) {
   game.explosions.push({ x, y, age: 0, ttl: 0.45, side });
+  audio.playSFX("explosion");
 }
 
 function isExiting(u) {
@@ -657,6 +917,7 @@ function updateUnits(dt) {
             x1: u.x, y1: u.y, x2: u.target.x, y2: u.target.y,
             age: 0, ttl: 0.12, side: u.side,
           });
+          audio.playSFX("shot");
         }
         continue;
       }
@@ -760,8 +1021,12 @@ function checkGameOver() {
   if (game.gameOver) return;
   if (game.player.baseHP <= 0) {
     game.gameOver = { winner: "enemy" };
+    audio.playSFX("lose");
+    audio.stopMusic();
   } else if (game.enemy.baseHP <= 0) {
     game.gameOver = { winner: "player" };
+    audio.playSFX("win");
+    audio.stopMusic();
   }
 }
 
@@ -813,7 +1078,14 @@ function updateEnemyAI(dt) {
 // -------------------------------------------------------------
 
 function update(dt) {
-  if (game.gameOver) return;
+  if (game.screen !== "playing" || game.gameOver) {
+    // Resync souris quand même (pour les états menu/gameOver)
+    if (game.player) {
+      game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
+      game.ui.mouse.y = game.ui.mouseScreen.y;
+    }
+    return;
+  }
   game.time += dt;
   updateCamera(dt);
   updateEnemyAI(dt);
@@ -822,7 +1094,6 @@ function update(dt) {
   updateAttackFx(dt);
   updateExplosions(dt);
   checkGameOver();
-  // Resync de la souris monde avec la caméra (utile même sans mousemove)
   game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
   game.ui.mouse.y = game.ui.mouseScreen.y;
 }
@@ -846,6 +1117,11 @@ function updateCamera(dt) {
 }
 
 function render(ctx) {
+  if (game.screen === "menu") {
+    drawMenu(ctx);
+    return;
+  }
+
   // Monde (avec décalage caméra)
   ctx.save();
   ctx.translate(-game.camera.x, 0);
@@ -862,7 +1138,7 @@ function render(ctx) {
   drawHUD(ctx);
   drawMinimap(ctx);
   drawScrollHints(ctx);
-  drawUpgradePanel(ctx); // panneau en coords écran
+  drawUpgradePanel(ctx);
   if (game.gameOver) drawGameOverOverlay(ctx);
 }
 
@@ -1348,7 +1624,7 @@ function drawBaseBuilding(ctx, side) {
 
 function drawBaseHP(ctx, side) {
   const state = game[side];
-  const ratio = state.baseHP / CONFIG.BASE_HP_MAX;
+  const ratio = state.baseHP / state.baseHPMax;
   const barW = CONFIG.BASE_W - 32;
   const barH = 14;
   const barX = side === "player" ? 16 : CONFIG.W - CONFIG.BASE_W + 16;
@@ -1370,7 +1646,7 @@ function drawBaseHP(ctx, side) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(
-    `${Math.ceil(state.baseHP)} / ${CONFIG.BASE_HP_MAX} ❤️`,
+    `${Math.ceil(state.baseHP)} / ${state.baseHPMax} ❤️`,
     barX + barW / 2,
     barY + barH / 2
   );
@@ -1783,6 +2059,173 @@ function drawExplosions(ctx) {
   }
 }
 
+// -------------------------------------------------------------
+// Menu d'accueil
+// -------------------------------------------------------------
+function drawMenu(ctx) {
+  // Fond dégradé
+  const grad = ctx.createLinearGradient(0, 0, 0, CONFIG.H);
+  grad.addColorStop(0, "#0a0e1a");
+  grad.addColorStop(1, "#1a2030");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+
+  // Grille de fond (style sci-fi subtil)
+  ctx.strokeStyle = "rgba(59, 130, 246, 0.05)";
+  ctx.lineWidth = 1;
+  for (let x = 0; x < CONFIG.CANVAS_W; x += 40) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CONFIG.H); ctx.stroke();
+  }
+  for (let y = 0; y < CONFIG.H; y += 40) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CONFIG.CANVAS_W, y); ctx.stroke();
+  }
+
+  const cx = CONFIG.CANVAS_W / 2;
+
+  // Titre
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 64px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = COLORS.player;
+  ctx.shadowBlur = 24;
+  ctx.fillText("🤖 ÉMERGENCE", cx, 140);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "16px -apple-system, sans-serif";
+  ctx.fillText("Prototype V0 — lane-based auto-battler", cx, 184);
+
+  // ── DIFFICULTÉ ──
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("DIFFICULTÉ", cx, 250);
+
+  const diffBtnW = 180, diffBtnH = 80, diffGap = 14;
+  const diffTotalW = 3 * diffBtnW + 2 * diffGap;
+  const diffStartX = cx - diffTotalW / 2;
+  const diffY = 270;
+  const diffOrder = ["easy", "normal", "hard"];
+  const diffRects = [];
+
+  for (const [i, key] of diffOrder.entries()) {
+    const preset = DIFFICULTY_PRESETS[key];
+    const rect = { x: diffStartX + i * (diffBtnW + diffGap), y: diffY, w: diffBtnW, h: diffBtnH };
+    diffRects.push({ rect, key });
+    const isActive = game.difficulty === key;
+    const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+
+    ctx.fillStyle = isActive ? "rgba(59, 130, 246, 0.32)" : (isHover ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)");
+    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 10);
+    ctx.fill();
+    ctx.strokeStyle = isActive ? COLORS.player : "rgba(255,255,255,0.15)";
+    ctx.lineWidth = isActive ? 2 : 1;
+    ctx.stroke();
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 22px -apple-system, sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${preset.emoji} ${preset.label}`, rect.x + rect.w / 2, rect.y + 28);
+
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.font = "11px -apple-system, sans-serif";
+    wrapText(ctx, preset.desc, rect.x + rect.w / 2, rect.y + 54, rect.w - 16, 13);
+  }
+
+  // ── BOUTON JOUER ──
+  const playW = 280, playH = 64;
+  const playRect = { x: cx - playW / 2, y: 400, w: playW, h: playH };
+  const playHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, playRect);
+
+  ctx.fillStyle = playHover ? COLORS.player : COLORS.playerDark;
+  roundedRect(ctx, playRect.x, playRect.y, playRect.w, playRect.h, 12);
+  ctx.fill();
+  ctx.strokeStyle = COLORS.player;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  if (playHover) {
+    ctx.shadowColor = COLORS.player;
+    ctx.shadowBlur = 16;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 26px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("▶  JOUER", playRect.x + playRect.w / 2, playRect.y + playRect.h / 2);
+
+  // ── SETTINGS AUDIO ──
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("PARAMÈTRES", cx, 510);
+
+  const togW = 180, togH = 44, togGap = 16;
+  const totalTogW = 2 * togW + togGap;
+  const togStartX = cx - totalTogW / 2;
+  const togY = 525;
+  const musicRect = { x: togStartX, y: togY, w: togW, h: togH };
+  const sfxRect = { x: togStartX + togW + togGap, y: togY, w: togW, h: togH };
+  drawToggleButton(ctx, musicRect, "🎵 Musique", audio.musicEnabled);
+  drawToggleButton(ctx, sfxRect, "🔊 Effets", audio.sfxEnabled);
+
+  // ── CONTRÔLES ──
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "11px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("Souris bord G/D pour scroller — ← → / A D — H / E pour recadrer — Échap pour annuler — 1-4 sélection factory", cx, 620);
+
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "10px -apple-system, sans-serif";
+  ctx.fillText("github.com/GuestElite/robotic-emergence", cx, CONFIG.H - 16);
+
+  game.ui.menuRects = { diff: diffRects, play: playRect, music: musicRect, sfx: sfxRect };
+}
+
+function drawToggleButton(ctx, rect, label, on) {
+  const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+  ctx.fillStyle = on
+    ? (isHover ? "rgba(34, 197, 94, 0.45)" : "rgba(34, 197, 94, 0.30)")
+    : (isHover ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.22)");
+  roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 8);
+  ctx.fill();
+  ctx.strokeStyle = on ? COLORS.hpGood : COLORS.enemy;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, rect.x + 14, rect.y + rect.h / 2);
+
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillStyle = on ? "#bbf7d0" : "#fecaca";
+  ctx.fillText(on ? "ON" : "OFF", rect.x + rect.w - 14, rect.y + rect.h / 2);
+}
+
+function wrapText(ctx, text, x, y, maxW, lineH) {
+  const words = text.split(" ");
+  let line = "";
+  let yy = y;
+  for (const w of words) {
+    const test = line ? line + " " + w : w;
+    if (ctx.measureText(test).width > maxW) {
+      ctx.fillText(line, x, yy);
+      line = w;
+      yy += lineH;
+    } else {
+      line = test;
+    }
+  }
+  if (line) ctx.fillText(line, x, yy);
+}
+
 function drawGameOverOverlay(ctx) {
   ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
   ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
@@ -1804,23 +2247,36 @@ function drawGameOverOverlay(ctx) {
   ctx.fillText(subtitle, CONFIG.CANVAS_W / 2, CONFIG.H / 2 - 20);
 
   // Bouton "Rejouer"
-  const btnW = 200;
-  const btnH = 56;
-  const btnX = (CONFIG.CANVAS_W - btnW) / 2;
+  const btnW = 180;
+  const btnH = 52;
+  const gap = 16;
+  const totalW = btnW * 2 + gap;
+  const startX = (CONFIG.CANVAS_W - totalW) / 2;
   const btnY = CONFIG.H / 2 + 30;
-  game.ui.replayBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
+  game.ui.replayBtn = { x: startX, y: btnY, w: btnW, h: btnH };
+  game.ui.gameOverMenuBtn = { x: startX + btnW + gap, y: btnY, w: btnW, h: btnH };
 
-  const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.replayBtn);
-  ctx.fillStyle = isHover ? COLORS.player : COLORS.playerDark;
-  roundedRect(ctx, btnX, btnY, btnW, btnH, 10);
+  const replayHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.replayBtn);
+  ctx.fillStyle = replayHover ? COLORS.player : COLORS.playerDark;
+  roundedRect(ctx, game.ui.replayBtn.x, game.ui.replayBtn.y, btnW, btnH, 10);
   ctx.fill();
   ctx.strokeStyle = COLORS.player;
   ctx.lineWidth = 2;
   ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 18px -apple-system, sans-serif";
+  ctx.fillText("↻ Rejouer", game.ui.replayBtn.x + btnW / 2, btnY + btnH / 2);
 
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 22px -apple-system, sans-serif";
-  ctx.fillText("↻ Rejouer", btnX + btnW / 2, btnY + btnH / 2);
+  const menuHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.gameOverMenuBtn);
+  ctx.fillStyle = menuHover ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
+  roundedRect(ctx, game.ui.gameOverMenuBtn.x, game.ui.gameOverMenuBtn.y, btnW, btnH, 10);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 18px -apple-system, sans-serif";
+  ctx.fillText("☰ Menu", game.ui.gameOverMenuBtn.x + btnW / 2, btnY + btnH / 2);
 }
 
 // -------------------------------------------------------------
@@ -2074,13 +2530,56 @@ function setupInput(canvas) {
 
   canvas.addEventListener("click", (evt) => {
     const screen = canvasCoordsFromEvent(canvas, evt);
-    const sx = screen.x, sy = screen.y;     // coords écran (HUD, panneau)
-    const wx = sx + game.camera.x, wy = sy; // coords monde (slots, factories)
+    const sx = screen.x, sy = screen.y;
+    const wx = sx + game.camera.x, wy = sy;
 
-    // Cas game over : seul le bouton Rejouer répond
+    // Cas menu : routes vers Play / difficulté / toggles audio
+    if (game.screen === "menu") {
+      const mr = game.ui.menuRects;
+      if (!mr) return;
+      audio.ensureCtx(); // débloque l'AudioContext sur le premier clic utilisateur
+      // Difficulté
+      for (const d of mr.diff) {
+        if (pointInRect(sx, sy, d.rect)) {
+          game.difficulty = d.key;
+          game.preset = DIFFICULTY_PRESETS[d.key];
+          audio.playSFX("click");
+          saveSettings();
+          return;
+        }
+      }
+      // Toggle musique
+      if (pointInRect(sx, sy, mr.music)) {
+        audio.setMusicEnabled(!audio.musicEnabled);
+        audio.playSFX("click");
+        saveSettings();
+        return;
+      }
+      // Toggle SFX
+      if (pointInRect(sx, sy, mr.sfx)) {
+        audio.setSfxEnabled(!audio.sfxEnabled);
+        audio.playSFX("click"); // joue avant le toggle si on désactive, sinon pas grave
+        saveSettings();
+        return;
+      }
+      // Play
+      if (pointInRect(sx, sy, mr.play)) {
+        audio.playSFX("click");
+        startGame(game.difficulty);
+        return;
+      }
+      return;
+    }
+
+    // Cas game over : Rejouer ou retour Menu
     if (game.gameOver) {
       if (game.ui.replayBtn && pointInRect(sx, sy, game.ui.replayBtn)) {
-        resetGame();
+        startGame(game.difficulty);
+        return;
+      }
+      if (game.ui.gameOverMenuBtn && pointInRect(sx, sy, game.ui.gameOverMenuBtn)) {
+        goToMenu();
+        return;
       }
       return;
     }
@@ -2173,8 +2672,16 @@ function setupInput(canvas) {
   });
 
   window.addEventListener("keydown", (evt) => {
+    if (game.screen === "menu") {
+      if (evt.key === "Enter" || evt.key === " ") {
+        audio.ensureCtx();
+        startGame(game.difficulty);
+      }
+      return;
+    }
     if (game.gameOver) {
-      if (evt.key === "Enter" || evt.key === " ") resetGame();
+      if (evt.key === "Enter" || evt.key === " ") startGame(game.difficulty);
+      if (evt.key === "Escape" || evt.key === "m") goToMenu();
       return;
     }
     if (evt.key === "Escape") {
@@ -2221,7 +2728,27 @@ function resetGame() {
   game.ui.replayBtn = null;
   game.ui.upgradePanel = null;
   game.ui.panelRects = null;
+  // Synchro AI_CONFIG depuis le preset courant (utilisé par updateEnemyAI)
+  AI_CONFIG.buildInterval = game.preset.aiBuildInterval;
+  AI_CONFIG.typeWeights = { ...game.preset.aiTypeWeights };
   buildSlots();
+}
+
+function startGame(difficulty) {
+  if (DIFFICULTY_PRESETS[difficulty]) {
+    game.difficulty = difficulty;
+    game.preset = DIFFICULTY_PRESETS[difficulty];
+  }
+  resetGame();
+  game.screen = "playing";
+  saveSettings();
+  audio.startMusic();
+}
+
+function goToMenu() {
+  game.screen = "menu";
+  game.gameOver = null;
+  audio.stopMusic();
 }
 
 // -------------------------------------------------------------
@@ -2248,7 +2775,9 @@ async function boot() {
 
   drawBootScreen(ctx, "Chargement...");
 
-  buildSlots();
+  // Settings persistés (difficulté, audio toggles)
+  loadSettings();
+
   buildHudButtons();
   setupInput(canvas);
 
@@ -2258,6 +2787,8 @@ async function boot() {
     console.warn("[Émergence] Erreur de chargement des sprites :", err);
   }
 
+  // Démarre l'écran de menu (le gameplay s'init au clic sur Jouer)
+  game.screen = "menu";
   requestAnimationFrame(gameLoop);
 }
 
