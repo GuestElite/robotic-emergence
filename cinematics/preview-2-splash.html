@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Émergence — Splash (Option 2)</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0; overflow: hidden;
+      background: #000; color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+      height: 100vh; width: 100vw;
+    }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #skip {
+      position: fixed; bottom: 24px; right: 24px;
+      padding: 8px 18px; border-radius: 8px;
+      background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.7);
+      border: 1px solid rgba(255,255,255,0.20);
+      font-size: 13px; cursor: pointer; backdrop-filter: blur(8px);
+      opacity: 0; transition: opacity 0.5s ease;
+    }
+    #skip.visible { opacity: 1; }
+    #skip:hover { background: rgba(255,255,255,0.18); color: #fff; }
+    .nav {
+      position: fixed; top: 16px; left: 16px;
+      display: flex; gap: 8px;
+    }
+    .nav a {
+      padding: 6px 12px; border-radius: 6px;
+      background: rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.7);
+      border: 1px solid rgba(255,255,255,0.15);
+      font-size: 12px; text-decoration: none;
+    }
+    .nav a.active { background: rgba(91,140,255,0.35); color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="nav">
+    <a href="/cinematics/preview-1-narrative.html">1 · Narrative</a>
+    <a class="active" href="/cinematics/preview-2-splash.html">2 · Splash</a>
+    <a href="/cinematics/preview-3-slideshow.html">3 · Slideshow</a>
+  </div>
+  <canvas id="c"></canvas>
+  <button id="skip">Passer ›</button>
+
+  <script>
+    const canvas = document.getElementById("c");
+    const ctx = canvas.getContext("2d");
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    // ─── Particles flottantes (fond)
+    const particles = [];
+    for (let i = 0; i < 60; i++) {
+      particles.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        vx: (Math.random() - 0.5) * 0.3,
+        vy: (Math.random() - 0.5) * 0.2,
+        r: Math.random() * 1.5 + 0.5,
+        alpha: Math.random() * 0.4 + 0.2,
+      });
+    }
+
+    // ─── Titre composé lettre par lettre
+    const TITLE = "ÉMERGENCE";
+    const SUBTITLE = "lane-based auto-battler";
+    const startTime = performance.now();
+
+    // ─── Audio : tente de jouer Decoherence pour le mood
+    const audio = new Audio("/11-sound-design/music/bgm-menu-decoherence.mp3");
+    audio.loop = false;
+    audio.volume = 0.35;
+    audio.play().catch(() => {});
+
+    function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+    function frame() {
+      const t = (performance.now() - startTime) / 1000; // secondes
+      ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+      ctx.fillRect(0, 0, W, H);
+
+      // Particles
+      for (const p of particles) {
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.x < 0) p.x = W;
+        if (p.x > W) p.x = 0;
+        if (p.y < 0) p.y = H;
+        if (p.y > H) p.y = 0;
+        ctx.fillStyle = `rgba(140, 200, 255, ${p.alpha})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Halo derrière le titre (pulse lent)
+      const pulse = 0.8 + 0.2 * Math.sin(t * 2);
+      const grad = ctx.createRadialGradient(W/2, H/2, 0, W/2, H/2, 350);
+      grad.addColorStop(0, `rgba(91, 140, 255, ${0.25 * pulse})`);
+      grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      // Titre lettre par lettre (chaque lettre apparaît à t = 0.4 + i*0.15)
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const titleY = H / 2 - 30;
+      const letterSpacing = 56;
+      const totalW = (TITLE.length - 1) * letterSpacing;
+      const startX = W / 2 - totalW / 2;
+      for (let i = 0; i < TITLE.length; i++) {
+        const appearAt = 0.4 + i * 0.13;
+        if (t < appearAt) continue;
+        const localT = Math.min(1, (t - appearAt) / 0.5);
+        const scale = 0.5 + 0.5 * easeOutCubic(localT);
+        const alpha = easeOutCubic(localT);
+        ctx.save();
+        ctx.translate(startX + i * letterSpacing, titleY);
+        ctx.scale(scale, scale);
+        // Glow
+        ctx.shadowColor = "#5b8cff";
+        ctx.shadowBlur = 28;
+        // Couleur gradient blanc → bleu
+        const lg = ctx.createLinearGradient(0, -50, 0, 50);
+        lg.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+        lg.addColorStop(1, `rgba(147, 180, 255, ${alpha})`);
+        ctx.fillStyle = lg;
+        ctx.font = "bold 72px -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif";
+        ctx.fillText(TITLE[i], 0, 0);
+        ctx.restore();
+      }
+
+      // Subtitle (apparaît après le titre)
+      const subAppearAt = 0.4 + TITLE.length * 0.13 + 0.3;
+      if (t > subAppearAt) {
+        const localT = Math.min(1, (t - subAppearAt) / 0.8);
+        const alpha = easeOutCubic(localT);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = `rgba(200, 220, 255, ${alpha * 0.7})`;
+        ctx.font = "20px -apple-system, sans-serif";
+        ctx.fillText(SUBTITLE, W / 2, titleY + 70);
+      }
+
+      // Affiche le bouton skip après 1s
+      if (t > 1 && !document.getElementById("skip").classList.contains("visible")) {
+        document.getElementById("skip").classList.add("visible");
+      }
+
+      // Auto-redirect après 7s
+      if (t > 7 && !window._redirecting) {
+        window._redirecting = true;
+        setTimeout(() => { window.location.href = "/prototype/"; }, 400);
+      }
+
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+
+    // Skip = clic ou bouton
+    document.getElementById("skip").addEventListener("click", () => {
+      window.location.href = "/prototype/";
+    });
+    document.body.addEventListener("click", (e) => {
+      if (e.target.id === "skip" || e.target.closest(".nav")) return;
+      window.location.href = "/prototype/";
+    });
+  </script>
+</body>
+</html>

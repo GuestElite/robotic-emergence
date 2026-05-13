@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Émergence — Slideshow (Option 3)</title>
+  <style>
+    html, body { margin:0; padding:0; overflow:hidden; background:#000; color:#fff;
+      font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;
+      height:100vh; width:100vw; }
+    canvas { display:block; width:100vw; height:100vh; }
+    #skip { position:fixed; bottom:24px; right:24px; padding:8px 18px;
+      border-radius:8px; background:rgba(255,255,255,0.10); color:rgba(255,255,255,0.7);
+      border:1px solid rgba(255,255,255,0.20); font-size:13px; cursor:pointer;
+      backdrop-filter:blur(8px); opacity:0; transition:opacity .5s ease; }
+    #skip.visible { opacity:1; }
+    #skip:hover { background:rgba(255,255,255,0.18); color:#fff; }
+    .nav { position:fixed; top:16px; left:16px; display:flex; gap:8px; z-index:10; }
+    .nav a { padding:6px 12px; border-radius:6px; background:rgba(255,255,255,0.08);
+      color:rgba(255,255,255,0.7); border:1px solid rgba(255,255,255,0.15);
+      font-size:12px; text-decoration:none; }
+    .nav a.active { background:rgba(91,140,255,0.35); color:#fff; }
+  </style>
+</head>
+<body>
+  <div class="nav">
+    <a href="/cinematics/preview-1-narrative.html">1 · Narrative</a>
+    <a href="/cinematics/preview-2-splash.html">2 · Splash</a>
+    <a class="active" href="/cinematics/preview-3-slideshow.html">3 · Slideshow</a>
+  </div>
+  <canvas id="c"></canvas>
+  <button id="skip">Passer ›</button>
+
+  <script>
+    const canvas = document.getElementById("c");
+    const ctx = canvas.getContext("2d");
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    // ─── Charge les sprites
+    const sprites = {};
+    const SPRITE_LIST = [
+      "factory-light-enemy", "factory-sniper-enemy", "factory-heavy-enemy",
+      "unit-heavy-enemy", "unit-sniper-enemy", "unit-light-enemy",
+      "unit-light-player", "unit-heavy-player", "factory-light-player",
+      "base-player", "base-enemy",
+    ];
+    function loadAll() {
+      return Promise.all(SPRITE_LIST.map((name) => new Promise((r) => {
+        const img = new Image();
+        img.onload = () => { sprites[name] = img; r(); };
+        img.onerror = () => { sprites[name] = null; r(); };
+        img.src = `/08-art-direction/sprites/${name}.png`;
+      })));
+    }
+
+    // ─── 4 tableaux
+    const FRAMES = [
+      {
+        bg: [25, 18, 12],
+        title: "2387.",
+        subtitle: "Les machines se sont rebellées contre leurs créateurs.",
+        sprites: [
+          { name: "unit-sniper-enemy", x: 0.30, y: 0.55, scale: 4 },
+          { name: "unit-heavy-enemy",  x: 0.50, y: 0.62, scale: 4 },
+          { name: "unit-light-enemy",  x: 0.70, y: 0.58, scale: 4 },
+        ],
+      },
+      {
+        bg: [40, 12, 12],
+        title: "Les frontières tombent.",
+        subtitle: "Une à une, les forteresses cèdent face à l'avancée.",
+        sprites: [
+          { name: "factory-sniper-enemy", x: 0.20, y: 0.55, scale: 1.8 },
+          { name: "factory-heavy-enemy",  x: 0.50, y: 0.55, scale: 1.8 },
+          { name: "factory-light-enemy",  x: 0.80, y: 0.55, scale: 1.8 },
+        ],
+      },
+      {
+        bg: [12, 22, 40],
+        title: "Tu es la dernière.",
+        subtitle: "Construis, défends, ne recule pas.",
+        sprites: [
+          { name: "base-player",         x: 0.30, y: 0.55, scale: 1.2 },
+          { name: "unit-light-player",   x: 0.55, y: 0.58, scale: 4 },
+          { name: "unit-heavy-player",   x: 0.70, y: 0.58, scale: 3.5 },
+          { name: "factory-light-player",x: 0.85, y: 0.55, scale: 1.5 },
+        ],
+      },
+      {
+        bg: [10, 15, 25],
+        title: "ÉMERGENCE.",
+        subtitle: "Lance la défense.",
+        sprites: [],  // pas de sprites, juste le titre
+        finale: true,
+      },
+    ];
+
+    const FRAME_DUR = 4.5;  // secondes par frame
+    const FADE_DUR = 0.8;   // fade in/out
+    const TOTAL_DUR = FRAMES.length * FRAME_DUR;
+
+    // ─── Audio
+    const audio = new Audio("/11-sound-design/music/bgm-menu-decoherence.mp3");
+    audio.loop = false;
+    audio.volume = 0.40;
+    audio.play().catch(() => {});
+
+    function easeInOut(t) { return t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2; }
+
+    function drawSprite(sp, frameProgress) {
+      const img = sprites[sp.name];
+      if (!img) return;
+      const w = img.width * sp.scale;
+      const h = img.height * sp.scale;
+      const x = sp.x * W - w / 2;
+      // Léger flottement vertical
+      const float = Math.sin(frameProgress * Math.PI * 2 + sp.x * 5) * 6;
+      const y = sp.y * H - h / 2 + float;
+      ctx.drawImage(img, x, y, w, h);
+    }
+
+    let startTime;
+    function frame() {
+      if (!startTime) startTime = performance.now();
+      const t = (performance.now() - startTime) / 1000;
+      const frameIdx = Math.floor(t / FRAME_DUR);
+
+      if (frameIdx >= FRAMES.length) {
+        if (!window._redirecting) {
+          window._redirecting = true;
+          setTimeout(() => { window.location.href = "/prototype/"; }, 200);
+        }
+        return;
+      }
+
+      const f = FRAMES[frameIdx];
+      const localT = (t % FRAME_DUR) / FRAME_DUR; // 0..1 dans cette frame
+
+      // Fade in/out alpha
+      let alpha = 1;
+      if (localT < FADE_DUR / FRAME_DUR) {
+        alpha = localT / (FADE_DUR / FRAME_DUR);
+      } else if (localT > 1 - FADE_DUR / FRAME_DUR) {
+        alpha = (1 - localT) / (FADE_DUR / FRAME_DUR);
+      }
+      alpha = Math.max(0, Math.min(1, alpha));
+
+      // Background
+      ctx.fillStyle = `rgb(${f.bg[0]}, ${f.bg[1]}, ${f.bg[2]})`;
+      ctx.fillRect(0, 0, W, H);
+
+      // Gradient radial vignette
+      const vGrad = ctx.createRadialGradient(W/2, H/2, 0, W/2, H/2, Math.max(W, H) * 0.7);
+      vGrad.addColorStop(0, "rgba(0,0,0,0)");
+      vGrad.addColorStop(1, "rgba(0,0,0,0.6)");
+      ctx.fillStyle = vGrad;
+      ctx.fillRect(0, 0, W, H);
+
+      // Sprites
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      // Filtre sépia ou bleu selon mood frame
+      ctx.imageSmoothingEnabled = false;  // pixel art crispness
+      for (const sp of f.sprites) drawSprite(sp, localT);
+      ctx.restore();
+
+      // Texte titre
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#fff";
+      const fs = f.finale ? 96 : 64;
+      ctx.font = `bold ${fs}px -apple-system, BlinkMacSystemFont, sans-serif`;
+      ctx.shadowColor = "#000";
+      ctx.shadowBlur = 24;
+      ctx.fillText(f.title, W / 2, H * 0.30);
+      // Subtitle
+      ctx.font = "22px -apple-system, sans-serif";
+      ctx.fillStyle = "rgba(220, 230, 250, 0.85)";
+      ctx.shadowBlur = 16;
+      ctx.fillText(f.subtitle, W / 2, H * 0.30 + 60);
+      ctx.restore();
+
+      // Bouton skip après 1s
+      if (t > 1) document.getElementById("skip").classList.add("visible");
+
+      requestAnimationFrame(frame);
+    }
+
+    loadAll().then(() => requestAnimationFrame(frame));
+
+    document.getElementById("skip").addEventListener("click", () => {
+      window.location.href = "/prototype/";
+    });
+    document.body.addEventListener("click", (e) => {
+      if (e.target.id === "skip" || e.target.closest(".nav")) return;
+      window.location.href = "/prototype/";
+    });
+  </script>
+</body>
+</html>
