@@ -516,6 +516,14 @@ const TURRET_TYPE = {
   killReward: 0,
 };
 
+// Upgrades dédiés aux turrets (4 stats au lieu de 6 — pas de creation rate / speed)
+const TURRET_UPGRADE_STATS = [
+  { id: "health",    label: "Health",     emoji: "🛡️", baseCost: 80,  perLevel: 0.25, kind: "turret-hp",       unit: "PV" },
+  { id: "shootRate", label: "Shoot rate", emoji: "🔫",  baseCost: 70,  perLevel: 0.18, kind: "turret-interval", unit: "s" },
+  { id: "range",     label: "Range",      emoji: "🎯",  baseCost: 90,  perLevel: 0.12, kind: "turret-range",    unit: "px" },
+  { id: "power",     label: "Power",      emoji: "💥",  baseCost: 100, perLevel: 0.22, kind: "turret-power",    unit: "" },
+];
+
 const LIGHTNING_COOLDOWN_SEC = 30;
 const LIGHTNING_KILL_HALF_WIDTH = 70; // moitié largeur de la zone létale (px)
 const LIGHTNING_TTL_SEC = 0.55;
@@ -730,6 +738,8 @@ function tryPlaceTurret(side, wallSlotIndex) {
     exitWaypoints: [],
     wallSlotRef: slot,
     totalInvested: TURRET_TYPE.cost,
+    // Upgrades (mêmes 4 niveaux que les factories, appliqués directement à la turret)
+    upgrades: { health: 0, shootRate: 0, range: 0, power: 0 },
   };
   game.units.push(turret);
   slot.turret = turret;
@@ -747,6 +757,43 @@ function sellTurret(side, wallSlotIndex) {
   slot.turret = null;
   audio.playSFX("sell");
   return refund;
+}
+
+// Achète un upgrade pour une turret. Applique immédiatement le bonus à l'unité.
+function tryUpgradeTurret(side, wallSlotIndex, statId) {
+  if (side !== "player") return false;
+  const state = game[side];
+  const slot = state.wallSlots[wallSlotIndex];
+  if (!slot || !slot.turret) return false;
+  const stat = TURRET_UPGRADE_STATS.find((s) => s.id === statId);
+  if (!stat) return false;
+  const turret = slot.turret;
+  const lvl = turret.upgrades[statId] || 0;
+  if (lvl >= MAX_UPGRADE_LEVEL) return false;
+  const cost = upgradeCost(stat, lvl);
+  if (state.money < cost) return false;
+
+  state.money -= cost;
+  game.stats[side].moneySpent += cost;
+  game.stats[side].upgradesBought++;
+  turret.upgrades[statId] = lvl + 1;
+  turret.totalInvested += cost;
+  applyTurretUpgrades(turret);
+  audio.playSFX("upgrade");
+  return true;
+}
+
+// Recalcule les stats effectives de la turret en partant des stats de base + upgrades
+function applyTurretUpgrades(turret) {
+  const u = turret.upgrades;
+  const newMaxHp = TURRET_TYPE.hp * statMultiplier(u.health, 0.25);
+  const hpRatio = turret.maxHp ? (turret.hp / turret.maxHp) : 1;
+  turret.maxHp = newMaxHp;
+  turret.hp = Math.min(newMaxHp, newMaxHp * hpRatio); // garde le % de vie courant
+  turret.stats.hp = newMaxHp;
+  turret.stats.damage = TURRET_TYPE.damage * statMultiplier(u.power, 0.22);
+  turret.stats.range = TURRET_TYPE.range * statMultiplier(u.range, 0.12);
+  turret.stats.attackInterval = TURRET_TYPE.attackInterval / statMultiplier(u.shootRate, 0.18);
 }
 
 // Conservé pour compat : renvoie le Y du gate central (mid).
@@ -2027,22 +2074,29 @@ function drawAttackFx(ctx) {
 function getPanelGeometry() {
   const sel = game.ui.upgradePanel;
   if (!sel) return null;
+  if (sel.type === "turret") {
+    const slot = game[sel.side].wallSlots[sel.index];
+    if (!slot || !slot.turret) return null;
+    const PW = 290;
+    const PH = 340; // moins haut : 4 stats au lieu de 6
+    const px = CONFIG.CANVAS_W - PW - 14;
+    const py = CONFIG.HUD_H + 14;
+    return { x: px, y: py, w: PW, h: PH, slot, side: sel.side, type: "turret" };
+  }
+  // Factory (par défaut)
   const slot = game[sel.side].slots[sel.slotIndex];
   if (!slot || !slot.factory) return null;
-
   const PW = 290;
   const PH = 432;
-
-  // Panneau pinné en haut à droite de l'écran (coords ÉCRAN, indépendant de la caméra)
   const px = CONFIG.CANVAS_W - PW - 14;
   const py = CONFIG.HUD_H + 14;
-
-  return { x: px, y: py, w: PW, h: PH, slot, side: sel.side };
+  return { x: px, y: py, w: PW, h: PH, slot, side: sel.side, type: "factory" };
 }
 
 function drawUpgradePanel(ctx) {
   const geo = getPanelGeometry();
   if (!geo) { game.ui.panelRects = null; return; }
+  if (geo.type === "turret") return drawTurretUpgradePanel(ctx, geo);
   const { x, y, w, h, slot, side } = geo;
   const factory = slot.factory;
   const type = FACTORY_TYPES[factory.typeId];
@@ -2253,6 +2307,201 @@ function drawModeToggle(ctx, x, y, w, factory, side) {
     if (editable) rects[mode] = { x: bx, y, w: btnW, h: btnH };
   }
   return rects;
+}
+
+function drawTurretUpgradePanel(ctx, geo) {
+  const { x, y, w, h, slot, side } = geo;
+  const turret = slot.turret;
+  const state = game[side];
+
+  // Fond
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.5)";
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = "rgba(15, 20, 25, 0.97)";
+  roundedRect(ctx, x, y, w, h, 10);
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = side === "player" ? COLORS.player : COLORS.enemy;
+  ctx.lineWidth = 2;
+  roundedRect(ctx, x, y, w, h, 10);
+  ctx.stroke();
+
+  // Header
+  let cursorY = y + 14;
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`🗼 Turret défensive`, x + 14, cursorY);
+
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "10px -apple-system, sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillText(`Investi : ${turret.totalInvested}💰`, x + w - 38, cursorY + 2);
+
+  cursorY += 22;
+
+  // HP de la turret (info)
+  const hpRatio = turret.hp / turret.maxHp;
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillRect(x + 12, cursorY, w - 24, 8);
+  ctx.fillStyle = hpRatio > 0.5 ? COLORS.hpGood : hpRatio > 0.25 ? COLORS.hpWarn : COLORS.hpDanger;
+  ctx.fillRect(x + 12, cursorY, (w - 24) * hpRatio, 8);
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "10px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(`${Math.ceil(turret.hp)} / ${Math.ceil(turret.maxHp)} PV`, x + w / 2, cursorY + 12);
+
+  cursorY += 28;
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + 12, cursorY);
+  ctx.lineTo(x + w - 12, cursorY);
+  ctx.stroke();
+
+  cursorY += 8;
+
+  // 4 lignes d'upgrade
+  const rects = { upgrades: [], sell: null, close: null, mode: null };
+  const rowH = 48;
+  const btnW = 70;
+
+  for (const stat of TURRET_UPGRADE_STATS) {
+    const lvl = turret.upgrades[stat.id] || 0;
+    const isMax = lvl >= MAX_UPGRADE_LEVEL;
+    const cost = isMax ? 0 : upgradeCost(stat, lvl);
+    const canAfford = !isMax && state.money >= cost;
+    const isPlayer = side === "player";
+    const enabled = isPlayer && !isMax && canAfford;
+
+    const rowX = x + 12;
+    const rowY = cursorY;
+
+    ctx.fillStyle = COLORS.hudText;
+    ctx.font = "bold 12px -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(`${stat.emoji} ${stat.label}`, rowX, rowY);
+
+    const previewLabel = formatTurretStatPreview(turret, stat);
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.font = "10px -apple-system, sans-serif";
+    ctx.fillText(previewLabel, rowX, rowY + 16);
+
+    for (let i = 0; i < MAX_UPGRADE_LEVEL; i++) {
+      const pipX = rowX + i * 9;
+      const pipY = rowY + 32;
+      ctx.fillStyle = i < lvl
+        ? (isPlayer ? COLORS.player : COLORS.enemy)
+        : "rgba(255,255,255,0.18)";
+      ctx.beginPath();
+      ctx.arc(pipX + 3, pipY + 3, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const btnRect = { x: x + w - 12 - btnW, y: rowY + 6, w: btnW, h: 32 };
+    const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, btnRect);
+    let btnFill;
+    if (isMax) btnFill = "rgba(34, 197, 94, 0.25)";
+    else if (!isPlayer) btnFill = COLORS.btnDisabled;
+    else if (!canAfford) btnFill = COLORS.btnDisabled;
+    else if (hover) btnFill = COLORS.btnHover;
+    else btnFill = COLORS.btnIdle;
+
+    ctx.fillStyle = btnFill;
+    roundedRect(ctx, btnRect.x, btnRect.y, btnRect.w, btnRect.h, 6);
+    ctx.fill();
+    ctx.strokeStyle = enabled ? COLORS.player : "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = isMax ? "#22c55e" : (enabled ? COLORS.hudText : COLORS.hudMuted);
+    ctx.font = "bold 11px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(isMax ? "✓ MAX" : `+ ${cost}💰`, btnRect.x + btnRect.w / 2, btnRect.y + btnRect.h / 2);
+
+    if (enabled) rects.upgrades.push({ rect: btnRect, statId: stat.id });
+
+    cursorY += rowH;
+  }
+
+  // Séparateur + sell
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.beginPath();
+  ctx.moveTo(x + 12, cursorY);
+  ctx.lineTo(x + w - 12, cursorY);
+  ctx.stroke();
+  cursorY += 8;
+
+  const refund = Math.floor(turret.totalInvested * SELL_RATIO);
+  const sellRect = { x: x + 12, y: cursorY, w: w - 24, h: 34 };
+  const sellEnabled = side === "player";
+  const sellHover = sellEnabled && pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, sellRect);
+  ctx.fillStyle = sellEnabled
+    ? (sellHover ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.22)")
+    : COLORS.btnDisabled;
+  roundedRect(ctx, sellRect.x, sellRect.y, sellRect.w, sellRect.h, 6);
+  ctx.fill();
+  ctx.strokeStyle = sellEnabled ? COLORS.enemy : "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = sellEnabled ? "#fee2e2" : COLORS.hudMuted;
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`❌ Vendre — +${refund}💰`, sellRect.x + sellRect.w / 2, sellRect.y + sellRect.h / 2);
+  if (sellEnabled) rects.sell = sellRect;
+
+  // Close button
+  const closeRect = { x: x + w - 26, y: y + 6, w: 20, h: 20 };
+  const closeHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, closeRect);
+  ctx.fillStyle = closeHover ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)";
+  roundedRect(ctx, closeRect.x, closeRect.y, closeRect.w, closeRect.h, 4);
+  ctx.fill();
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("×", closeRect.x + closeRect.w / 2, closeRect.y + closeRect.h / 2);
+  rects.close = closeRect;
+
+  game.ui.panelRects = rects;
+}
+
+function formatTurretStatPreview(turret, stat) {
+  const u = turret.upgrades;
+  const lvl = u[stat.id] || 0;
+  const lvlNext = Math.min(lvl + 1, MAX_UPGRADE_LEVEL);
+  const fmt = (v) => Number(v).toFixed(stat.id === "shootRate" ? 2 : 0);
+
+  switch (stat.id) {
+    case "health": {
+      const cur = TURRET_TYPE.hp * statMultiplier(lvl, 0.25);
+      const next = TURRET_TYPE.hp * statMultiplier(lvlNext, 0.25);
+      return `${fmt(cur)} → ${fmt(next)} PV`;
+    }
+    case "shootRate": {
+      const cur = TURRET_TYPE.attackInterval / statMultiplier(lvl, 0.18);
+      const next = TURRET_TYPE.attackInterval / statMultiplier(lvlNext, 0.18);
+      return `${fmt(cur)}s → ${fmt(next)}s / tir`;
+    }
+    case "range": {
+      const cur = TURRET_TYPE.range * statMultiplier(lvl, 0.12);
+      const next = TURRET_TYPE.range * statMultiplier(lvlNext, 0.12);
+      return `${fmt(cur)} → ${fmt(next)} px`;
+    }
+    case "power": {
+      const cur = TURRET_TYPE.damage * statMultiplier(lvl, 0.22);
+      const next = TURRET_TYPE.damage * statMultiplier(lvlNext, 0.22);
+      return `${fmt(cur)} → ${fmt(next)} dégâts`;
+    }
+    default:
+      return "";
+  }
 }
 
 function formatStatPreview(factory, stat) {
@@ -3123,27 +3372,30 @@ function setupInput(canvas) {
     // 0) Panneau d'upgrade ouvert : intercepter les clics dessus (coords ÉCRAN)
     if (game.ui.upgradePanel && game.ui.panelRects) {
       const pr = game.ui.panelRects;
+      const sel = game.ui.upgradePanel;
+      const isTurretPanel = sel.type === "turret";
+
       if (pr.close && pointInRect(sx, sy, pr.close)) {
         game.ui.upgradePanel = null;
         return;
       }
-      const sel = game.ui.upgradePanel;
       if (sel.side === "player" && pr.sell && pointInRect(sx, sy, pr.sell)) {
-        const refund = sellFactory("player", sel.slotIndex);
-        if (refund !== false) {
-          game.ui.upgradePanel = null;
-        }
+        const refund = isTurretPanel
+          ? sellTurret("player", sel.index)
+          : sellFactory("player", sel.slotIndex);
+        if (refund !== false) game.ui.upgradePanel = null;
         return;
       }
       if (sel.side === "player" && pr.upgrades) {
         for (const u of pr.upgrades) {
           if (pointInRect(sx, sy, u.rect)) {
-            tryUpgradeFactory("player", sel.slotIndex, u.statId);
+            if (isTurretPanel) tryUpgradeTurret("player", sel.index, u.statId);
+            else tryUpgradeFactory("player", sel.slotIndex, u.statId);
             return;
           }
         }
       }
-      if (sel.side === "player" && pr.mode) {
+      if (!isTurretPanel && sel.side === "player" && pr.mode) {
         if (pr.mode.attack && pointInRect(sx, sy, pr.mode.attack)) {
           const slot = game.player.slots[sel.slotIndex];
           if (slot?.factory) slot.factory.mode = "attack";
@@ -3180,15 +3432,35 @@ function setupInput(canvas) {
       }
     }
 
-    // 3) Placement turret sur wall slot (mode build turret actif) ?
-    if (game.ui.selectedBuildType === "turret") {
+    // 3) Wall slot du joueur — placement de turret OU ouverture du panneau si déjà construite
+    {
       const wallSlots = game.player.wallSlots || [];
       for (let i = 0; i < wallSlots.length; i++) {
         const s = wallSlots[i];
         if (wx >= s.x && wx <= s.x + s.w && wy >= s.y && wy <= s.y + s.h) {
-          if (tryPlaceTurret("player", i)) {
-            if (game.player.money < TURRET_TYPE.cost) game.ui.selectedBuildType = null;
+          if (s.turret) {
+            // Turret existante → panneau d'upgrade
+            game.ui.upgradePanel = { side: "player", type: "turret", index: i };
+            game.ui.selectedBuildType = null;
+            return;
           }
+          if (game.ui.selectedBuildType === "turret") {
+            if (tryPlaceTurret("player", i)) {
+              if (game.player.money < TURRET_TYPE.cost) game.ui.selectedBuildType = null;
+            }
+            return;
+          }
+        }
+      }
+    }
+
+    // 3bis) Wall slot ennemi avec turret → panneau lecture seule
+    {
+      const wallSlots = game.enemy.wallSlots || [];
+      for (let i = 0; i < wallSlots.length; i++) {
+        const s = wallSlots[i];
+        if (s.turret && wx >= s.x && wx <= s.x + s.w && wy >= s.y && wy <= s.y + s.h) {
+          game.ui.upgradePanel = { side: "enemy", type: "turret", index: i };
           return;
         }
       }
@@ -3210,7 +3482,7 @@ function setupInput(canvas) {
       }
       // 2b) Factory existante → ouvrir panneau d'upgrade
       if (slot.factory) {
-        game.ui.upgradePanel = { side: "player", slotIndex: playerSlotIdx };
+        game.ui.upgradePanel = { side: "player", type: "factory", slotIndex: playerSlotIdx };
         game.ui.selectedBuildType = null; // évite de placer accidentellement
         return;
       }
@@ -3221,7 +3493,7 @@ function setupInput(canvas) {
     if (enemySlotIdx >= 0) {
       const slot = game.enemy.slots[enemySlotIdx];
       if (slot.factory) {
-        game.ui.upgradePanel = { side: "enemy", slotIndex: enemySlotIdx };
+        game.ui.upgradePanel = { side: "enemy", type: "factory", slotIndex: enemySlotIdx };
         return;
       }
     }
