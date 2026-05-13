@@ -520,6 +520,7 @@ const game = {
   player: null,
   enemy: null,
   units: [],
+  props: [],                       // décors fixes posés sur la map (rocher, cactus, etc.)
   attackFx: [],
   explosions: [],
   lightning: null,                // { x, y1, y2, age, ttl } pendant l'animation
@@ -635,6 +636,57 @@ const SPRITE_FILES = [
   "unit-sniper-player",
   "unit-sniper-enemy",
   "effect-explosion",
+  "prop-rock-big",
+  "prop-rock-small",
+  "prop-cactus",
+  "prop-dry-brush",
+  "prop-grass-tuft",
+];
+
+// -------------------------------------------------------------
+// Props décoratifs (placés sur la map à des positions fixes au démarrage)
+// -------------------------------------------------------------
+// Chaque type définit : sprite, dimensions (utilisées pour le rendu centré sur
+// (x, y) = position du pied du prop), et un bbox de collision relatif à (x, y).
+// Si blocking=true, les unités sont push-out hors du bbox.
+//
+// Le sprite est dessiné avec sa BASE alignée sur (x, y) — autrement dit l'ancre
+// est en bas-centre du sprite (comme une plante posée sur le sol).
+const PROP_TYPES = {
+  "rock-big":   { sprite: "prop-rock-big",   w: 36, h: 36, blocking: true,
+                  // bbox = empreinte au sol, centrée sur (x, y), un peu plus
+                  // étroit que la silhouette pour éviter le wall-stick
+                  bbox: { dx: -11, dy: -7, w: 22, h: 9 } },
+  "rock-small": { sprite: "prop-rock-small", w: 24, h: 24, blocking: true,
+                  bbox: { dx: -7, dy: -5, w: 14, h: 6 } },
+  "cactus":     { sprite: "prop-cactus",     w: 30, h: 50, blocking: true,
+                  // bbox au pied du cactus, ne bloque pas les bras qui dépassent
+                  bbox: { dx: -6, dy: -6, w: 12, h: 6 } },
+  "dry-brush":  { sprite: "prop-dry-brush",  w: 34, h: 28, blocking: false,
+                  bbox: null },
+  "grass-tuft": { sprite: "prop-grass-tuft", w: 20, h: 16, blocking: false,
+                  bbox: null },
+};
+
+// Positions fixes (déterministes pour V1). x/y = pied du prop dans le monde.
+// Le monde fait 2000 × 720, bases ~280 px à gauche/droite, battlefield ~320..1720.
+// Disposition : variation top/bot, éparpillée, jamais sur les voies du milieu.
+const PROP_POSITIONS = [
+  // Haut du terrain (Y 110-220)
+  { type: "rock-big",   x: 420,  y: 130 },
+  { type: "cactus",     x: 720,  y: 165 },
+  { type: "grass-tuft", x: 500,  y: 200 },
+  { type: "rock-small", x: 1180, y: 145 },
+  { type: "dry-brush",  x: 1450, y: 180 },
+  { type: "rock-big",   x: 980,  y: 220 },
+  // Bas du terrain (Y 500-680)
+  { type: "cactus",     x: 480,  y: 560 },
+  { type: "rock-small", x: 850,  y: 605 },
+  { type: "dry-brush",  x: 1100, y: 545 },
+  { type: "rock-big",   x: 1350, y: 590 },
+  { type: "grass-tuft", x: 1550, y: 540 },
+  { type: "rock-small", x: 1620, y: 660 },
+  { type: "cactus",     x: 350,  y: 660 },
 ];
 
 const sprites = {};
@@ -1254,6 +1306,40 @@ function updateUnits(dt) {
   game.units = game.units.filter((u) => u.hp > 0);
 }
 
+// Push-out des unités hors des bbox des props bloquants. Approche soft (post-step) :
+// si une unité finit dans un bbox bloquant, on la repousse vers le bord le plus proche.
+// Pour les unités stationnaires (turrets) on skip — elles ne peuvent pas être dans un prop
+// de toute façon (placement contrôlé) et les recoller serait coûteux.
+function resolvePropCollisions() {
+  if (!game.props || game.props.length === 0) return;
+  for (const u of game.units) {
+    if (u.hp <= 0 || u.stationary) continue;
+    const r = (u.stats && u.stats.radius) || 8;
+    for (const p of game.props) {
+      const def = p.def;
+      if (!def || !def.blocking || !def.bbox) continue;
+      const bb = def.bbox;
+      const left = p.x + bb.dx;
+      const top = p.y + bb.dy;
+      const right = left + bb.w;
+      const bottom = top + bb.h;
+      // Test de chevauchement cercle (unité) × rectangle (bbox)
+      if (u.x + r <= left || u.x - r >= right ||
+          u.y + r <= top  || u.y - r >= bottom) continue;
+      // Push : trouve la pénétration minimale et pousse l'unité hors du bbox
+      const penLeft   = (u.x + r) - left;
+      const penRight  = right - (u.x - r);
+      const penTop    = (u.y + r) - top;
+      const penBottom = bottom - (u.y - r);
+      const minPen = Math.min(penLeft, penRight, penTop, penBottom);
+      if (minPen === penLeft)        u.x = left - r;
+      else if (minPen === penRight)  u.x = right + r;
+      else if (minPen === penTop)    u.y = top - r;
+      else                            u.y = bottom + r;
+    }
+  }
+}
+
 function updateExplosions(dt) {
   for (const fx of game.explosions) fx.age += dt;
   game.explosions = game.explosions.filter((fx) => fx.age < fx.ttl);
@@ -1397,6 +1483,7 @@ function update(dt) {
   updateEnemyAI(dt);
   updateFactories(dt);
   updateUnits(dt);
+  resolvePropCollisions();
   updateAttackFx(dt);
   updateExplosions(dt);
   checkGameOver();
@@ -1506,6 +1593,7 @@ function render(ctx) {
   ctx.translate(-game.camera.x, 0);
   drawGround(ctx);
   drawBattlefieldLane(ctx);
+  drawProps(ctx);
   drawBase(ctx, "player");
   drawBase(ctx, "enemy");
   drawWallSlots(ctx, "player");
@@ -1629,6 +1717,24 @@ function drawBattlefieldLane(ctx) {
 // -------------------------------------------------------------
 // Rendu — bases (rempart + grille + factories)
 // -------------------------------------------------------------
+
+// Dessine les props décoratifs, triés par Y croissant : ceux du haut sont
+// dessinés en premier, ceux du bas par-dessus → fausse profondeur 2.5D.
+// L'ancre du sprite est au pied du prop (bas-centre) pour que le pied colle au sol.
+function drawProps(ctx) {
+  if (!game.props || game.props.length === 0) return;
+  const sorted = [...game.props].sort((a, b) => a.y - b.y);
+  for (const p of sorted) {
+    const def = p.def;
+    if (!def) continue;
+    const img = sprites[def.sprite];
+    if (!img) continue;
+    // Position du sprite : centré en X sur p.x, bas du sprite aligné avec p.y
+    const dx = Math.round(p.x - def.w / 2);
+    const dy = Math.round(p.y - def.h);
+    ctx.drawImage(img, dx, dy, def.w, def.h);
+  }
+}
 
 function drawBase(ctx, side) {
   const baseX = side === "player" ? 0 : CONFIG.W - CONFIG.BASE_W;
@@ -4089,6 +4195,12 @@ function resetGame() {
   game.player = makeSideState("player");
   game.enemy = makeSideState("enemy");
   game.units = [];
+  game.props = PROP_POSITIONS.map((p) => ({
+    type: p.type,
+    x: p.x,
+    y: p.y,
+    def: PROP_TYPES[p.type],
+  }));
   game.attackFx = [];
   game.explosions = [];
   game.lightning = null;
