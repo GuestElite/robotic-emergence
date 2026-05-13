@@ -4562,7 +4562,9 @@ async function trySurrender() {
 }
 
 function drawSettingsButton(ctx) {
-  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 10;
+  // Position : APRÈS l'éclair (110px) ET l'IEM (110px). Sans ça le bouton
+  // settings se superposait sur l'IEM (même zone x ~886).
+  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 8 + 110 + 10;
   const btnY = 12;
   const btnW = 36;
   const btnH = 36;
@@ -5762,7 +5764,7 @@ function drawTutorialOverlay(ctx) {
   const step = TUTORIAL_STEPS[game.tutorial.step];
   if (!step) { game.tutorial.active = false; return; }
 
-  const W = 460, H = 130;
+  const W = 460, H = 190; // 130 → 190 pour ne plus que texte et boutons se chevauchent
   const x = 16;
   const y = CONFIG.HUD_H + 8;
 
@@ -5786,17 +5788,18 @@ function drawTutorialOverlay(ctx) {
   ctx.font = "bold 18px -apple-system, sans-serif";
   ctx.fillText(step.title, x + 16, y + 32);
 
-  // Corps (wrapping)
+  // Corps (wrapping) — pleine largeur, plus de réserve pour les boutons
+  // puisqu'ils sont sous le texte, pas à côté.
   ctx.fillStyle = "#fff";
   ctx.font = "13px -apple-system, sans-serif";
-  const lines = wrapTextToLines(ctx, step.body, W - 32 - 160);
+  const lines = wrapTextToLines(ctx, step.body, W - 32);
   let cy = y + 60;
-  for (const ln of lines.slice(0, 4)) {
+  for (const ln of lines.slice(0, 5)) {
     ctx.fillText(ln, x + 16, cy);
     cy += 16;
   }
 
-  // Boutons : Suivant + Skip
+  // Boutons : Suivant + Skip (en bas de la bannière)
   const isLast = game.tutorial.step >= TUTORIAL_STEPS.length - 1;
   const btnW = 130, btnH = 36;
   const nextRect = { x: x + W - btnW - 16, y: y + H - btnH - 14, w: btnW, h: btnH };
