@@ -1839,13 +1839,15 @@ function updateCameraShake(dt) {
 }
 
 // ── MODE VAGUES ─────────────────────────────────────────────────────────
-// Spawn périodique d'unités ennemies de plus en plus fortes. Pas de
-// factory côté ennemi : les unités apparaissent directement à droite,
-// au niveau d'une porte aléatoire. La partie se termine quand la base
-// du joueur tombe ; on track game.wave.defeated = nb de vagues clear.
+// L'ennemi n'a aucun bâtiment : à chaque vague, un nombre fixe d'unités
+// spawne directement aux portes du rempart adverse. Quand toutes sont
+// éliminées, la vague suivante démarre (avec une courte pause de 3s ou
+// après un clic Skip). Chaque vague est plus dense ET plus puissante :
+// scaling de stats + composition + boss tous les 5 niveaux.
 function buildWaveQueue(waveNum) {
   const queue = [];
-  const total = 3 + Math.floor(waveNum * 1.6);
+  // Densité : démarre à 6 puis +2 par vague (vague 5 = 14 unités, v10 = 24).
+  const total = 6 + Math.floor(waveNum * 1.8);
   for (let i = 0; i < total; i++) {
     const r = Math.random();
     let typeId;
@@ -1858,35 +1860,45 @@ function buildWaveQueue(waveNum) {
     } else {
       typeId = r < 0.18 ? "light" : r < 0.36 ? "swarmer" : r < 0.55 ? "heavy" : r < 0.78 ? "sniper" : "air";
     }
-    queue.push(typeId);
+    queue.push({ typeId, isBoss: false });
+  }
+  // Boss à la fin des vagues multiples de 5 (vague 5, 10, 15…) :
+  // une unité massive heavy avec ×3 HP et ×2 dmg.
+  if (waveNum % 5 === 0) {
+    queue.push({ typeId: "heavy", isBoss: true });
   }
   return queue;
 }
 
-function spawnWaveUnit(typeId, waveNum) {
+function spawnWaveUnit(spec, waveNum) {
+  // spec : { typeId, isBoss } (rétrocompat : si string passée, traité comme typeId)
+  const typeId = typeof spec === "string" ? spec : spec.typeId;
+  const isBoss = typeof spec === "string" ? false : !!spec.isBoss;
   const ut = UNIT_TYPES[typeId];
   if (!ut) return;
-  // Scaling de stats : +8% HP/dmg par vague (cumulé)
-  const sm = 1 + (waveNum - 1) * 0.08;
+  // Scaling de stats : +10% HP/dmg par vague (cumulé). Boss : ×3 HP / ×2 dmg.
+  const sm = 1 + (waveNum - 1) * 0.10;
+  const bossHpMult = isBoss ? 3 : 1;
+  const bossDmgMult = isBoss ? 2 : 1;
   const stats = {
-    hp: ut.hp * sm,
-    damage: ut.damage * sm,
-    speed: ut.speed,
+    hp: ut.hp * sm * bossHpMult,
+    damage: ut.damage * sm * bossDmgMult,
+    speed: ut.speed * (isBoss ? 0.85 : 1),
     range: ut.range,
-    radius: ut.radius,
+    radius: ut.radius * (isBoss ? 1.4 : 1),
     attackInterval: ut.attackInterval,
-    killReward: Math.round((ut.killReward || 5) * (0.8 + waveNum * 0.05)),
+    killReward: Math.round((ut.killReward || 5) * (0.8 + waveNum * 0.05) * (isBoss ? 5 : 1)),
     layer: ut.layer || "ground",
     canTargetAir: !!ut.canTargetAir,
   };
   const gateRows = CONFIG.PATH_ROWS;
   const gateRow = gateRows[Math.floor(Math.random() * gateRows.length)];
   const gate = getGateCenter("enemy", gateRow);
-  const isAir = stats.layer === "air";
   game.units.push({
     side: "enemy",
     typeId,
     kind: "unit",
+    isBoss,
     x: gate.x,
     y: gate.y,
     gateY: gate.y,
@@ -1911,9 +1923,12 @@ function updateWaveSpawning(dt) {
     w.betweenWaves -= dt;
     if (w.betweenWaves <= 0) {
       w.queue = buildWaveQueue(w.current);
+      w.totalThisWave = w.queue.length;
       w.inWave = true;
       w.spawnTimer = 0;
-      w.spawnInterval = Math.max(0.35, 1.0 - w.current * 0.04);
+      // Spawn rate : démarre à 0.9s entre 2 unités, accélère 5%/vague jusqu'à 0.30s
+      w.spawnInterval = Math.max(0.30, 0.90 - w.current * 0.05);
+      w.justClearedAt = null;
     }
     return;
   }
@@ -1921,62 +1936,152 @@ function updateWaveSpawning(dt) {
     w.spawnTimer += dt;
     if (w.spawnTimer >= w.spawnInterval) {
       w.spawnTimer = 0;
-      const t = w.queue.shift();
-      spawnWaveUnit(t, w.current);
+      const spec = w.queue.shift();
+      spawnWaveUnit(spec, w.current);
     }
     return;
   }
-  // Attente que tous les ennemis de la vague soient morts
+  // Toutes spawnées : on attend la mort du dernier ennemi pour clore la vague
   const enemiesAlive = game.units.some((u) => u.side === "enemy" && u.hp > 0 && !u.stationary);
   if (!enemiesAlive) {
     w.defeated = w.current;
-    // Bonus monnaie + petit shake fêter la vague
-    const bonus = 60 + w.current * 12;
+    // Bonus monnaie : 100 + 25/vague (10 fois plus généreux qu'avant)
+    const bonus = 100 + w.current * 25;
     game.player.money += bonus;
     spawnDamageNumber({ x: 200, y: CONFIG.HUD_H + 60, side: "player", stats: { radius: 0 } }, bonus, true);
     triggerCameraShake(0.6, 0.25);
+    w.lastBonus = bonus;
     w.current++;
     w.inWave = false;
-    w.betweenWaves = 5;
+    // Pause auto plus courte (3s) — le joueur peut Skip via clic
+    w.betweenWaves = 3;
+    w.justClearedAt = performance.now();
   }
 }
 
-// Petit overlay haut-centre pour le mode Vagues : numéro de vague,
-// statut (en cours / breather), countdown si pause entre vagues.
+// Skip la pause d'inter-vague (déclenche immédiatement la prochaine vague).
+function skipWaveBreather() {
+  const w = game.wave;
+  if (!w?.active || w.inWave) return false;
+  w.betweenWaves = 0;
+  return true;
+}
+
+// Panneau bas-centre du mode Vagues : numéro de vague, barre de progression
+// "ennemis restants / total", composition (icones), bouton Skip pendant la
+// pause inter-vague. Glassmorphique violet pour bien le distinguer du HUD.
 function drawWaveOverlay(ctx) {
   const w = game.wave;
   if (!w?.active) return;
   const cx = CONFIG.CANVAS_W / 2;
-  const y = CONFIG.HUD_H + 6;
-  const W = 220, H = 50;
+  const W = 460, H = 86;
+  // En bas : 24px de marge depuis le bord inférieur
+  const y = CONFIG.H - H - 24;
   const x = cx - W / 2;
+
+  // Panneau glass violet
   ctx.save();
-  ctx.fillStyle = "rgba(168, 85, 247, 0.20)";
-  roundedRect(ctx, x, y, W, H, 12);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(168, 85, 247, 0.65)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
+  drawGlass(ctx, x, y, W, H, {
+    radius: 16,
+    tint: "rgba(76, 29, 149, 0.55)",
+    border: "rgba(168, 85, 247, 0.65)",
+  });
+
+  // Header : numéro vague + état
+  const aliveCount = game.units.filter((u) => u.side === "enemy" && u.hp > 0 && !u.stationary).length;
+  const total = w.totalThisWave || 0;
+  const remaining = w.queue.length + aliveCount;
+  const killed = Math.max(0, total - remaining);
+  const ratio = total > 0 ? killed / total : 0;
+  const hasBoss = w.queue.some((s) => s?.isBoss) || game.units.some((u) => u.isBoss && u.side === "enemy" && u.hp > 0);
 
   ctx.fillStyle = "#fff";
-  ctx.font = "bold 18px -apple-system, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(`🌊 Vague ${w.current}`, cx, y + 18);
+  ctx.font = "bold 16px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  const waveLabel = `🌊 Vague ${w.current}${hasBoss ? "  ·  👑 BOSS" : ""}`;
+  ctx.fillText(waveLabel, x + 16, y + 12);
 
   ctx.font = "11px -apple-system, sans-serif";
   ctx.fillStyle = "rgba(255,255,255,0.75)";
-  if (w.inWave) {
-    if (w.queue.length > 0) {
-      ctx.fillText(`Spawning… ${w.queue.length} restantes`, cx, y + 36);
-    } else {
-      const aliveCount = game.units.filter((u) => u.side === "enemy" && u.hp > 0 && !u.stationary).length;
-      ctx.fillText(`Élimine les ${aliveCount} ennemis restants`, cx, y + 36);
+  ctx.textAlign = "right";
+  ctx.fillText(`Vagues clear : ${w.defeated || 0}`, x + W - 16, y + 14);
+
+  // Barre de progression "kill"
+  const barX = x + 16;
+  const barY = y + 36;
+  const barW = W - 32;
+  const barH = 14;
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  roundedRect(ctx, barX, barY, barW, barH, 7);
+  ctx.fill();
+  if (w.inWave && total > 0) {
+    const fillW = barW * ratio;
+    const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+    grad.addColorStop(0, "#a855f7");
+    grad.addColorStop(1, "#22d3ee");
+    ctx.fillStyle = grad;
+    if (fillW > 4) {
+      roundedRect(ctx, barX, barY, Math.max(4, fillW), barH, 7);
+      ctx.fill();
     }
+  }
+  // Texte de progression sur la barre
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 11px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  if (w.inWave) {
+    const status = w.queue.length > 0
+      ? `${killed} / ${total} kills · ${w.queue.length} à spawn · ${aliveCount} en jeu`
+      : `${killed} / ${total} kills · ${aliveCount} restants — élimine-les pour la suite`;
+    ctx.fillText(status, barX + barW / 2, barY + barH / 2);
   } else {
     const sec = Math.max(0, Math.ceil(w.betweenWaves));
-    ctx.fillText(`Prochaine vague dans ${sec}s — vagues clear : ${w.defeated}`, cx, y + 36);
+    ctx.fillText(`✓ Vague ${w.current - 1} terminée  ·  +${w.lastBonus || 0}💰  ·  Suivante dans ${sec}s`, barX + barW / 2, barY + barH / 2);
   }
+
+  // Bouton Skip pendant la pause
+  game.ui.waveSkipBtn = null;
+  if (!w.inWave) {
+    const skipW = 110, skipH = 22;
+    const skipRect = { x: x + W - skipW - 10, y: y + H - skipH - 8, w: skipW, h: skipH };
+    const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, skipRect);
+    ctx.fillStyle = hover ? "rgba(168, 85, 247, 0.85)" : "rgba(168, 85, 247, 0.55)";
+    roundedRect(ctx, skipRect.x, skipRect.y, skipRect.w, skipRect.h, 6);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 11px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("⏩ Vague suivante", skipRect.x + skipRect.w / 2, skipRect.y + skipRect.h / 2);
+    game.ui.waveSkipBtn = skipRect;
+  } else {
+    // Composition : mini-icones des prochains spawns + ceux à venir dans la queue
+    const compoY = y + H - 22;
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.font = "10px -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    const counts = {};
+    for (const s of w.queue) {
+      const tid = typeof s === "string" ? s : s.typeId;
+      counts[tid] = (counts[tid] || 0) + 1;
+    }
+    const icon = { light: "🤖", heavy: "🛡️", swarmer: "🐝", sniper: "🎯", air: "✈️", medic: "⚕️" };
+    let txt = "À venir : ";
+    if (w.queue.length === 0) txt = "Toutes les unités spawnent — kill-les pour passer";
+    else {
+      const parts = [];
+      for (const k of Object.keys(counts)) parts.push(`${icon[k] || "•"}×${counts[k]}`);
+      txt += parts.join("  ");
+    }
+    ctx.fillText(txt, x + 16, compoY);
+  }
+
   ctx.restore();
 }
 
@@ -3840,6 +3945,25 @@ function unitSpriteNameFor(u) {
 function drawUnits(ctx) {
   for (const u of game.units) {
     const radius = u.stats.radius;
+    // Aura boss : halo rouge pulsant + couronne, sous le sprite
+    if (u.isBoss) {
+      const t = performance.now() / 220;
+      const pulse = 0.5 + 0.5 * Math.sin(t);
+      const auraR = radius * (2.4 + 0.25 * pulse);
+      const aura = ctx.createRadialGradient(u.x, u.y, radius * 0.5, u.x, u.y, auraR);
+      aura.addColorStop(0, `rgba(239, 68, 68, ${(0.55 + 0.20 * pulse).toFixed(3)})`);
+      aura.addColorStop(0.6, "rgba(239, 68, 68, 0.18)");
+      aura.addColorStop(1, "rgba(239, 68, 68, 0)");
+      ctx.fillStyle = aura;
+      ctx.beginPath();
+      ctx.arc(u.x, u.y, auraR, 0, Math.PI * 2);
+      ctx.fill();
+      // Couronne au-dessus
+      ctx.font = `bold ${Math.round(radius * 0.9)}px -apple-system, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("👑", u.x, u.y - radius - 10);
+    }
     const spriteName = unitSpriteNameFor(u);
     if (sprites[spriteName]) {
       const size = radius * 4;
@@ -7347,6 +7471,13 @@ function setupInput(canvas) {
       return;
     }
 
+    // 1bis bis bis) Bouton Skip vague (mode Vagues, pendant la pause inter-vague)
+    if (game.ui.waveSkipBtn && pointInRect(sx, sy, game.ui.waveSkipBtn)) {
+      audio.playSFX("click");
+      skipWaveBreather();
+      return;
+    }
+
     // 1bis ter) Bouton Drop Renforts — instant, pas de visée
     if (game.ui.dropBtn && pointInRect(sx, sy, game.ui.dropBtn)) {
       audio.playSFX("click");
@@ -7956,10 +8087,12 @@ function startGame(difficulty) {
       current: 1,
       defeated: 0,
       queue: [],
+      totalThisWave: 0,
       spawnTimer: 0,
       spawnInterval: 1.0,
       betweenWaves: 4,    // 4s avant la 1ère vague
       inWave: false,
+      lastBonus: 0,
     };
   } else {
     game.wave = null;
