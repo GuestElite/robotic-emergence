@@ -1501,7 +1501,8 @@ function drawSlots(ctx, side) {
   const state = game[side];
   const isPlayer = side === "player";
   const hover = game.ui.hoverSlot;
-  const previewActive = isPlayer && !!game.ui.selectedBuildType;
+  // Preview seulement pour les types de FACTORIES (pas pour turret qui se pose sur le mur)
+  const previewActive = isPlayer && !!game.ui.selectedBuildType && !!FACTORY_TYPES[game.ui.selectedBuildType];
 
   // 1) Passe path : cellules de la croix en couleur "route", chaque rangée teintée par gate
   state.slots.forEach((slot) => {
@@ -1536,8 +1537,9 @@ function drawSlots(ctx, side) {
       }
     }
 
-    // HOVER en mode build (s'écrase par-dessus le preview)
-    if (isPlayer && game.ui.selectedBuildType && hover && hover.side === "player" && hover.slotIndex === idx) {
+    // HOVER en mode build factory (turret est géré dans drawWallSlots)
+    if (isPlayer && game.ui.selectedBuildType && FACTORY_TYPES[game.ui.selectedBuildType]
+        && hover && hover.side === "player" && hover.slotIndex === idx) {
       const type = FACTORY_TYPES[game.ui.selectedBuildType];
       if (!slot.factory && game.player.money >= type.cost) {
         fill = COLORS.slotHover;
