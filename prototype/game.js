@@ -683,6 +683,35 @@ const IEM_COOLDOWN_SEC = 60;
 const IEM_COST = 400;
 const IEM_TTL_SEC = 1.2;
 
+// Drop Renforts : spawn 3 unités tier I "light" gratuites pour le camp lanceur,
+// directement à la sortie de base. Permet de réagir rapidement à une percée
+// adverse sans attendre la production de factory.
+const DROP_COOLDOWN_SEC = 50;
+const DROP_COST = 200;
+const DROP_UNIT_COUNT = 3;
+
+// Surge Économique : un boost immédiat + 2.5x le revenu passif pendant 15s.
+// Outil de comeback ou d'accélération mid-game.
+const SURGE_COOLDOWN_SEC = 60;
+const SURGE_COST = 100;
+const SURGE_INSTANT_BONUS = 200;
+const SURGE_DURATION_SEC = 15;
+const SURGE_INCOME_MULT = 2.5;
+
+// Pickups sur la carte (coffres d'or). Spawn périodique dans la zone neutre,
+// la première unité (peu importe le camp) qui passe dans le radius le récolte
+// pour son camp. Crée un objectif territorial qui peut renverser une partie.
+const PICKUP_SPAWN_INTERVAL = 30;   // secondes entre 2 spawns tant que < max
+const PICKUP_LIFETIME = 30;         // secondes avant disparition
+const PICKUP_RADIUS = 30;
+const PICKUP_VALUE = 150;
+const PICKUP_MAX_ON_MAP = 3;
+// Zone de spawn : neutre, en évitant les abords directs des remparts
+const PICKUP_X_MIN = CONFIG.BASE_W + 200;     // 480
+const PICKUP_X_MAX = CONFIG.W - CONFIG.BASE_W - 200;  // 1520
+const PICKUP_Y_MIN = CONFIG.HUD_H + 80;       // 140
+const PICKUP_Y_MAX = CONFIG.H - 80;           // 640
+
 function makeSideState(side) {
   const preset = game.preset;
   // En multijoueur, les deux joueurs partent avec le même argent et le même
@@ -721,6 +750,8 @@ function makeStats() {
     lightningsUsed: 0,
     factoriesBuiltByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0, air: 0, medic: 0 },
     unitsSpawnedByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0, air: 0, medic: 0 },
+    // Timeline pour graphique post-game : push { t, money, army } toutes les ~2s.
+    timeline: [],
   };
 }
 
@@ -2439,6 +2470,10 @@ function update(dt) {
     updateDamageNumbers(dt);
     updateCameraShake(dt);
     updateFactoryAnims(dt);
+    // Sample la timeline côté guest aussi : money et units sont sync via
+    // snapshot, donc les courbes seront cohérentes avec celles du host.
+    game.time += dt;
+    sampleTimeline(dt);
     game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
     game.ui.mouse.y = game.ui.mouseScreen.y;
     return;
@@ -2450,6 +2485,8 @@ function update(dt) {
   if (game.mode !== "mp") updateEnemyAI(dt);
   if (game.wave?.active && typeof updateWaveSpawning === "function") updateWaveSpawning(dt);
   updateIncome(dt);
+  sampleTimeline(dt);
+  updatePickups(dt);
   updateFactories(dt);
   updateUnits(dt);
   resolvePropCollisions();
@@ -2478,6 +2515,135 @@ function update(dt) {
   }
 }
 
+// Pickups d'or sur la carte. Spawn périodique tant qu'on n'a pas atteint le
+// max simultané. Lifetime limité (disparait s'il n'est pas pris). Collision
+// AABB-circle vs unités mobiles : la 1re unité (n'importe quel camp) qui
+// touche le pickup le récolte pour son camp.
+function updatePickups(dt) {
+  if (!Array.isArray(game.pickups)) game.pickups = [];
+
+  // Lifetime + collision
+  for (const p of game.pickups) {
+    p.age += dt;
+    if (p.consumed) continue;
+    for (const u of game.units) {
+      if (u.hp <= 0) continue;
+      if (u.stationary) continue;
+      const dx = u.x - p.x;
+      const dy = u.y - p.y;
+      if (dx * dx + dy * dy <= (PICKUP_RADIUS + (u.stats?.radius || 12)) ** 2) {
+        p.consumed = true;
+        p.consumedBy = u.side;
+        p.fadeAge = 0;
+        game[u.side].money += p.value;
+        spawnDamageNumber({ x: p.x, y: p.y - 12, side: u.side, stats: { radius: 0 } }, p.value, true);
+        spawnExplosion(p.x, p.y, u.side);
+        audio.playSFX("upgrade");
+        break;
+      }
+    }
+  }
+  // Cleanup : expirés (lifetime atteint) ou consommés (après 0.6s d'anim fade)
+  game.pickups = game.pickups.filter((p) => {
+    if (p.consumed) {
+      p.fadeAge = (p.fadeAge || 0) + dt;
+      return p.fadeAge < 0.6;
+    }
+    return p.age < PICKUP_LIFETIME;
+  });
+
+  // Spawn (host autoritaire en MP, sinon partout)
+  if (game.mode === "mp" && game.mp?.role !== "host") return;
+  game.pickupSpawnTimer -= dt;
+  if (game.pickupSpawnTimer <= 0) {
+    const alive = game.pickups.filter((p) => !p.consumed).length;
+    if (alive < PICKUP_MAX_ON_MAP) {
+      const x = PICKUP_X_MIN + Math.random() * (PICKUP_X_MAX - PICKUP_X_MIN);
+      const y = PICKUP_Y_MIN + Math.random() * (PICKUP_Y_MAX - PICKUP_Y_MIN);
+      game.pickups.push({
+        id: ++game.pickupIdSeq,
+        x, y,
+        value: PICKUP_VALUE,
+        age: 0,
+        consumed: false,
+      });
+    }
+    game.pickupSpawnTimer = PICKUP_SPAWN_INTERVAL;
+  }
+}
+
+// Rendu d'un pickup (coffre/pièce d'or). Animation : pulse + halo + emoji 💰
+// au centre. À la consommation : flash + fade rapide.
+function drawPickups(ctx) {
+  if (!Array.isArray(game.pickups) || !game.pickups.length) return;
+  const t = performance.now() / 380;
+  for (const p of game.pickups) {
+    const consumed = !!p.consumed;
+    const fadeT = consumed ? Math.min(1, (p.fadeAge || 0) / 0.6) : 0;
+    const alpha = consumed ? Math.max(0, 1 - fadeT) : 1;
+    const expiring = !consumed && p.age > PICKUP_LIFETIME - 5;
+    const blink = expiring ? (Math.sin(t * 6) * 0.5 + 0.5) : 1;
+    const pulse = consumed ? 1 + fadeT * 0.8 : 1 + Math.sin(t + p.id) * 0.08;
+    const r = PICKUP_RADIUS * pulse;
+    ctx.save();
+    ctx.globalAlpha = alpha * (expiring ? 0.4 + 0.6 * blink : 1);
+
+    // Halo doré
+    const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 1.6);
+    halo.addColorStop(0, "rgba(251, 191, 36, 0.45)");
+    halo.addColorStop(0.5, "rgba(251, 191, 36, 0.18)");
+    halo.addColorStop(1, "rgba(251, 191, 36, 0)");
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r * 1.6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Disque central + bord
+    ctx.fillStyle = consumed ? "#fff7d6" : "#fbbf24";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#92400e";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Symbole
+    ctx.fillStyle = "#7c2d12";
+    ctx.font = "bold 18px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("💰", p.x, p.y);
+
+    ctx.restore();
+  }
+}
+
+// Sampling pour graphique post-game. Sample toutes les 2s : argent en banque
+// + "army value" (somme des killReward des unités vivantes du camp = proxy
+// économique de la valeur militaire déployée). Appelé aussi côté guest pour
+// que les deux camps voient un graphique cohérent (le money/units sont déjà
+// sync via snapshot).
+function sampleTimeline(dt) {
+  game.timelineAccum = (game.timelineAccum || 0) + dt;
+  if (game.timelineAccum < 2) return;
+  game.timelineAccum -= 2;
+  const armyValueOf = (side) => {
+    let v = 0;
+    for (const u of game.units) {
+      if (u.side === side && u.hp > 0) v += u.stats.killReward || 0;
+    }
+    return v;
+  };
+  const t = game.time;
+  game.stats.player.timeline.push({ t, money: game.player.money, army: armyValueOf("player") });
+  game.stats.enemy.timeline.push({ t, money: game.enemy.money, army: armyValueOf("enemy") });
+  // Cap : 600 samples = 20 minutes de partie. Au-delà on décime (1 sur 2).
+  if (game.stats.player.timeline.length > 600) {
+    game.stats.player.timeline = game.stats.player.timeline.filter((_, i) => i % 2 === 0);
+    game.stats.enemy.timeline = game.stats.enemy.timeline.filter((_, i) => i % 2 === 0);
+  }
+}
+
 // Revenu passif : chaque seconde, les deux camps gagnent un revenu de base.
 // Un bonus "comeback" est ajouté au camp qui a moins d'argent que l'adversaire
 // (1💰/s par tranche de 50💰 d'écart, plafonné à +6) pour qu'une partie
@@ -2495,8 +2661,10 @@ function updateIncome(dt) {
     const eMoney = game.enemy.money;
     const playerBonus = Math.min(BONUS_CAP, Math.floor(Math.max(0, eMoney - pMoney) / BONUS_PER_GAP));
     const enemyBonus = Math.min(BONUS_CAP, Math.floor(Math.max(0, pMoney - eMoney) / BONUS_PER_GAP));
-    game.player.money += BASE_INCOME + playerBonus;
-    game.enemy.money += BASE_INCOME + enemyBonus;
+    const pSurge = (game.player.surgeUntil || 0) > game.time ? SURGE_INCOME_MULT : 1;
+    const eSurge = (game.enemy.surgeUntil || 0) > game.time ? SURGE_INCOME_MULT : 1;
+    game.player.money += Math.round((BASE_INCOME + playerBonus) * pSurge);
+    game.enemy.money += Math.round((BASE_INCOME + enemyBonus) * eSurge);
   }
 }
 
@@ -2509,6 +2677,13 @@ function updateLightning(dt) {
   if (game.iemCooldown > 0) game.iemCooldown = Math.max(0, game.iemCooldown - dt);
   if (game.mode === "mp" && game.mp && game.mp.enemyIemCooldown > 0) {
     game.mp.enemyIemCooldown = Math.max(0, game.mp.enemyIemCooldown - dt);
+  }
+  // Drop / Surge cooldowns
+  if (game.dropCooldown > 0) game.dropCooldown = Math.max(0, game.dropCooldown - dt);
+  if (game.surgeCooldown > 0) game.surgeCooldown = Math.max(0, game.surgeCooldown - dt);
+  if (game.mode === "mp" && game.mp) {
+    if (game.mp.enemyDropCooldown > 0) game.mp.enemyDropCooldown = Math.max(0, game.mp.enemyDropCooldown - dt);
+    if (game.mp.enemySurgeCooldown > 0) game.mp.enemySurgeCooldown = Math.max(0, game.mp.enemySurgeCooldown - dt);
   }
   // Tick l'animation IEM en cours
   if (game.iem) {
@@ -2569,6 +2744,83 @@ function iemCdFor(side) {
 function setIemCdFor(side, value) {
   if (side === "player") game.iemCooldown = value;
   else if (game.mode === "mp" && game.mp) game.mp.enemyIemCooldown = value;
+}
+
+// --- Drop & Surge cooldown helpers (mêmes patterns que Lightning/IEM) -----
+function dropCdFor(side) {
+  if (side === "player") return game.dropCooldown || 0;
+  if (game.mode === "mp" && game.mp) return game.mp.enemyDropCooldown || 0;
+  return 0;
+}
+function setDropCdFor(side, value) {
+  if (side === "player") game.dropCooldown = value;
+  else if (game.mode === "mp" && game.mp) game.mp.enemyDropCooldown = value;
+}
+function surgeCdFor(side) {
+  if (side === "player") return game.surgeCooldown || 0;
+  if (game.mode === "mp" && game.mp) return game.mp.enemySurgeCooldown || 0;
+  return 0;
+}
+function setSurgeCdFor(side, value) {
+  if (side === "player") game.surgeCooldown = value;
+  else if (game.mode === "mp" && game.mp) game.mp.enemySurgeCooldown = value;
+}
+
+// Drop Renforts : spawn de DROP_UNIT_COUNT unités light tier 1 à la sortie de
+// base du camp. Coût payé, cooldown armé, SFX + secousse caméra subtile.
+function fireDrop(side) {
+  if (dropCdFor(side) > 0) return false;
+  const state = game[side];
+  if (!state || state.money < DROP_COST) return false;
+  state.money -= DROP_COST;
+  game.stats[side].moneySpent += DROP_COST;
+  setDropCdFor(side, DROP_COOLDOWN_SEC);
+
+  // Spawn devant la base : x à la frontière sortante, y répartis sur 3 lanes.
+  const baseX = side === "player" ? CONFIG.BASE_W + 24 : CONFIG.W - CONFIG.BASE_W - 24;
+  const lanes = [CONFIG.H * 0.30, CONFIG.H * 0.50, CONFIG.H * 0.70];
+  const baseStats = spawnStatsFor({ typeId: "light", upgrades: defaultUpgrades(), tier: 1 });
+  for (let i = 0; i < DROP_UNIT_COUNT; i++) {
+    const y = lanes[i % lanes.length];
+    const stats = { ...baseStats };
+    game.units.push({
+      side,
+      typeId: "light",
+      kind: "unit",
+      x: baseX,
+      y,
+      gateY: y,
+      hp: stats.hp,
+      maxHp: stats.hp,
+      stats,
+      target: null,
+      attackCooldown: 0,
+      wanderY: null,
+      wanderTimer: 0,
+      mode: "attack",
+      exitWaypoints: [],
+    });
+    game.stats[side].unitsSpawned++;
+    if (game.stats[side].unitsSpawnedByType.light != null) game.stats[side].unitsSpawnedByType.light++;
+    spawnExplosion(baseX, y, side);
+  }
+  audio.playSFX("place");
+  triggerCameraShake(0.8, 0.20);
+  return true;
+}
+
+// Surge Économique : bonus instant + multiplicateur de revenu pendant N secondes.
+function fireSurge(side) {
+  if (surgeCdFor(side) > 0) return false;
+  const state = game[side];
+  if (!state || state.money < SURGE_COST) return false;
+  state.money -= SURGE_COST;
+  game.stats[side].moneySpent += SURGE_COST;
+  setSurgeCdFor(side, SURGE_COOLDOWN_SEC);
+  state.money += SURGE_INSTANT_BONUS;
+  state.surgeUntil = (game.time || 0) + SURGE_DURATION_SEC;
+  audio.playSFX("upgrade");
+  return true;
 }
 
 // Toggle du mode de visée (clic bouton Éclair / touche L)
@@ -2680,6 +2932,7 @@ function render(ctx) {
   drawBase(ctx, "enemy");
   drawWallSlots(ctx, "player");
   drawWallSlots(ctx, "enemy");
+  drawPickups(ctx);
   drawUnits(ctx);
   drawAttackFx(ctx);
   drawProjectiles(ctx);
@@ -4875,12 +5128,41 @@ function drawGameOverReport(ctx) {
   // Panneau glassmorphique
   drawGlass(ctx, px, py, PW, PH, { radius: 20, tint: "rgba(15, 18, 32, 0.78)", border: "rgba(255,255,255,0.22)" });
 
-  // Header
-  ctx.fillStyle = COLORS.hudText;
-  ctx.font = "bold 16px -apple-system, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  ctx.fillText("📊 RAPPORT DE PARTIE", px + PW / 2, py + 12);
+  // Tabs cliquables : Stats (table) / Graphiques (timeline économie + army)
+  if (!game.ui.gameOverTab) game.ui.gameOverTab = "stats";
+  const tabW = 130, tabH = 28;
+  const tabsY = py + 8;
+  const tabsTotalW = tabW * 2 + 8;
+  const tabsX = px + (PW - tabsTotalW) / 2;
+  const tabs = [
+    { id: "stats", label: "📊 Stats" },
+    { id: "charts", label: "📈 Graphiques" },
+  ];
+  const tabRects = {};
+  tabs.forEach((t, i) => {
+    const rect = { x: tabsX + i * (tabW + 8), y: tabsY, w: tabW, h: tabH };
+    tabRects[t.id] = rect;
+    const isActive = game.ui.gameOverTab === t.id;
+    const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+    ctx.fillStyle = isActive ? "rgba(91,140,255,0.35)" : (isHover ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)");
+    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 8);
+    ctx.fill();
+    ctx.strokeStyle = isActive ? COLORS.player : "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = isActive ? "#fff" : COLORS.hudText;
+    ctx.font = "bold 12px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(t.label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+  });
+  game.ui.gameOverTabRects = tabRects;
+
+  // Si onglet Graphiques actif → bypass le tableau
+  if (game.ui.gameOverTab === "charts") {
+    drawTimelineCharts(ctx, px + 18, py + 50, PW - 36, PH - 64);
+    return;
+  }
 
   // Colonnes : Label · Joueur · Ennemi
   const labelX = px + 28;
@@ -4894,6 +5176,7 @@ function drawGameOverReport(ctx) {
   const myColor = me === "player" ? COLORS.player : COLORS.enemy;
   const oppColor = opp === "player" ? COLORS.player : COLORS.enemy;
 
+  ctx.textBaseline = "top";
   ctx.font = "bold 12px -apple-system, sans-serif";
   ctx.textAlign = "left";
   ctx.fillStyle = COLORS.hudMuted;
@@ -4964,6 +5247,131 @@ function drawGameOverReport(ctx) {
   ctx.font = "italic 11px -apple-system, sans-serif";
   ctx.textAlign = "center";
   ctx.fillText(`Ratio kills / units : Joueur ${playerEff} · Ennemi ${enemyEff}`, px + PW / 2, py + PH - 14);
+}
+
+// Rendu d'une mini-courbe (line chart) avec axes simples.
+// data : [{ t, v }] · x/y/w/h zone du graphe.
+function drawLineChart(ctx, x, y, w, h, series, opts = {}) {
+  const padL = 38, padR = 8, padT = 14, padB = 22;
+  const gx = x + padL;
+  const gy = y + padT;
+  const gw = w - padL - padR;
+  const gh = h - padT - padB;
+
+  // Fond chart
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  roundedRect(ctx, x, y, w, h, 8);
+  ctx.fill();
+
+  // Titre
+  if (opts.title) {
+    ctx.fillStyle = COLORS.hudText;
+    ctx.font = "bold 11px -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(opts.title, x + 10, y + 4);
+  }
+
+  // Calcul max global sur les séries
+  let maxV = 0, maxT = 0;
+  for (const s of series) {
+    for (const p of s.data) {
+      if (p.v > maxV) maxV = p.v;
+      if (p.t > maxT) maxT = p.t;
+    }
+  }
+  if (maxV < 1) maxV = 1;
+  if (maxT < 1) maxT = 1;
+
+  // Grille horizontale (4 lignes)
+  ctx.strokeStyle = "rgba(255,255,255,0.07)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const ly = gy + (gh * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(gx, ly);
+    ctx.lineTo(gx + gw, ly);
+    ctx.stroke();
+    // Label Y
+    const val = Math.round(maxV * (1 - i / 4));
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.font = "9px -apple-system, sans-serif";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(val), gx - 4, ly);
+  }
+
+  // Axe X : 0 → maxT (durée). Tick toutes les 60s ou plus selon durée.
+  const tickStep = maxT > 600 ? 120 : (maxT > 240 ? 60 : 30);
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "9px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (let t = 0; t <= maxT; t += tickStep) {
+    const lx = gx + (gw * t) / maxT;
+    ctx.fillText(`${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`, lx, gy + gh + 4);
+  }
+
+  // Lignes
+  for (const s of series) {
+    if (s.data.length < 2) continue;
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < s.data.length; i++) {
+      const p = s.data[i];
+      const lx = gx + (gw * p.t) / maxT;
+      const ly = gy + gh - (gh * p.v) / maxV;
+      if (i === 0) ctx.moveTo(lx, ly);
+      else ctx.lineTo(lx, ly);
+    }
+    ctx.stroke();
+  }
+
+  // Légende
+  let lgX = x + w - padR;
+  ctx.font = "10px -apple-system, sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  for (let i = series.length - 1; i >= 0; i--) {
+    const s = series[i];
+    ctx.fillStyle = s.color;
+    ctx.fillText(`■ ${s.label}`, lgX, y + 4);
+    lgX -= ctx.measureText(`■ ${s.label}`).width + 12;
+  }
+}
+
+function drawTimelineCharts(ctx, x, y, w, h) {
+  const isMp = game.mode === "mp";
+  const me = mySide();
+  const opp = oppSide();
+  const meLabel = isMp ? "Moi" : "Joueur";
+  const oppLabel = isMp ? "Adversaire" : "Ennemi";
+  const meColor = me === "player" ? COLORS.player : COLORS.enemy;
+  const oppColor = opp === "player" ? COLORS.player : COLORS.enemy;
+  const ps = game.stats[me];
+  const es = game.stats[opp];
+
+  const moneySeries = [
+    { label: meLabel,  color: meColor,  data: ps.timeline.map((p) => ({ t: p.t, v: p.money })) },
+    { label: oppLabel, color: oppColor, data: es.timeline.map((p) => ({ t: p.t, v: p.money })) },
+  ];
+  const armySeries = [
+    { label: meLabel,  color: meColor,  data: ps.timeline.map((p) => ({ t: p.t, v: p.army })) },
+    { label: oppLabel, color: oppColor, data: es.timeline.map((p) => ({ t: p.t, v: p.army })) },
+  ];
+
+  const chartH = (h - 14) / 2;
+  drawLineChart(ctx, x, y, w, chartH, moneySeries, { title: "💰 Argent en banque" });
+  drawLineChart(ctx, x, y + chartH + 14, w, chartH, armySeries, { title: "⚔️ Army value (somme killReward unités vivantes)" });
+
+  if (ps.timeline.length < 2 && es.timeline.length < 2) {
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.font = "italic 12px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Pas assez de données — la partie a été trop courte.", x + w / 2, y + h / 2);
+  }
 }
 
 // -------------------------------------------------------------
@@ -5666,6 +6074,8 @@ function drawHUD(ctx) {
   drawBuildButtons(ctx);
   drawLightningButton(ctx);
   drawIemButton(ctx);
+  drawDropButton(ctx);
+  drawSurgeButton(ctx);
   drawSettingsButton(ctx);
   drawSurrenderButton(ctx);
 
@@ -5948,9 +6358,8 @@ async function trySurrender() {
 }
 
 function drawSettingsButton(ctx) {
-  // Position : APRÈS l'éclair (110px) ET l'IEM (110px). Sans ça le bouton
-  // settings se superposait sur l'IEM (même zone x ~886).
-  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 8 + 110 + 10;
+  // Position : APRÈS Lightning, IEM, Drop, Surge (4 × 110px + gaps).
+  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 8 + 110 + 8 + 110 + 8 + 110 + 10;
   const btnY = 12;
   const btnW = 36;
   const btnH = 36;
@@ -6196,6 +6605,97 @@ function drawIemButton(ctx) {
     ctx.fillStyle = "#22d3ee";
     ctx.fillRect(btnX + 2, btnY + btnH - 4, (btnW - 4) * ratio, 2);
   }
+}
+
+// Helper générique : bouton de sort en haut HUD. Évite la duplication entre
+// Drop et Surge (Lightning/IEM gardent leurs versions dédiées par historique).
+function drawSpellButton(ctx, opts) {
+  const { id, x, y, w, h, label, cost, cd, maxCd, accentRgba, accentHex, canAfford, ready, extraSubLabel } = opts;
+  const enabled = ready && canAfford;
+  const rect = { x, y, w, h };
+  game.ui[id] = rect;
+  const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+
+  ctx.save();
+  if (enabled) {
+    ctx.fillStyle = isHover ? accentRgba.replace("0.35", "0.55") : accentRgba;
+    ctx.shadowColor = accentHex;
+    ctx.shadowBlur = isHover ? 16 : 8;
+  } else if (!ready) {
+    ctx.fillStyle = "rgba(100,116,139,0.22)";
+  } else {
+    ctx.fillStyle = "rgba(239,68,68,0.18)";
+  }
+  roundedRect(ctx, x, y, w, h, 8);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = enabled ? accentHex : (ready ? "rgba(239,68,68,0.55)" : "rgba(255,255,255,0.15)");
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.fillStyle = enabled ? "#fff" : COLORS.hudMuted;
+  ctx.font = "bold 13px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  if (!ready) {
+    ctx.fillText(`${label.split(" ")[0]} ${Math.ceil(cd)}s`, x + w / 2, y + h / 2 - 4);
+  } else {
+    ctx.fillText(label, x + w / 2, y + h / 2 - 4);
+  }
+  ctx.font = "bold 10px -apple-system, sans-serif";
+  ctx.fillStyle = canAfford ? "#fbbf24" : "rgba(239,68,68,0.85)";
+  ctx.fillText(extraSubLabel || `${cost} 💰`, x + w / 2, y + h / 2 + 10);
+
+  if (!ready) {
+    const ratio = 1 - cd / maxCd;
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(x + 2, y + h - 4, w - 4, 2);
+    ctx.fillStyle = accentHex;
+    ctx.fillRect(x + 2, y + h - 4, (w - 4) * ratio, 2);
+  }
+}
+
+// Bouton Drop Renforts — placé à droite du bouton IEM. Couleur ambre.
+function drawDropButton(ctx) {
+  const btnW = 110, btnH = 36;
+  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 8 + 110 + 8;
+  drawSpellButton(ctx, {
+    id: "dropBtn",
+    x: btnX, y: 12, w: btnW, h: btnH,
+    label: "🪂 Drop",
+    cost: DROP_COST,
+    cd: dropCdFor(mySide()),
+    maxCd: DROP_COOLDOWN_SEC,
+    accentRgba: "rgba(251, 191, 36, 0.35)",
+    accentHex: "#fbbf24",
+    canAfford: game[mySide()].money >= DROP_COST,
+    ready: dropCdFor(mySide()) <= 0,
+  });
+}
+
+// Bouton Surge Économique — placé à droite du Drop. Couleur vert pastel.
+function drawSurgeButton(ctx) {
+  const btnW = 110, btnH = 36;
+  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 8 + 110 + 8 + 110 + 8;
+  const me = mySide();
+  const surgeActive = (game[me].surgeUntil || 0) > game.time;
+  const subLabel = surgeActive
+    ? `⚡ ${Math.ceil((game[me].surgeUntil || 0) - game.time)}s actif`
+    : `${SURGE_COST} 💰`;
+  drawSpellButton(ctx, {
+    id: "surgeBtn",
+    x: btnX, y: 12, w: btnW, h: btnH,
+    label: "📈 Surge",
+    cost: SURGE_COST,
+    cd: surgeCdFor(me),
+    maxCd: SURGE_COOLDOWN_SEC,
+    accentRgba: "rgba(34, 197, 94, 0.35)",
+    accentHex: "#22c55e",
+    canAfford: game[me].money >= SURGE_COST,
+    ready: surgeCdFor(me) <= 0,
+    extraSubLabel: subLabel,
+  });
 }
 
 // Effet visuel : flash blanc plein écran qui s'estompe + texte "IEM" central.
@@ -6610,6 +7110,16 @@ function setupInput(canvas) {
 
     // Cas game over : Rejouer / Rematch / retour Menu
     if (game.gameOver) {
+      // Tabs Stats / Graphiques
+      if (game.ui.gameOverTabRects) {
+        for (const [id, rect] of Object.entries(game.ui.gameOverTabRects)) {
+          if (pointInRect(sx, sy, rect)) {
+            game.ui.gameOverTab = id;
+            audio.playSFX("click");
+            return;
+          }
+        }
+      }
       if (game.ui.replayBtn && pointInRect(sx, sy, game.ui.replayBtn)) {
         startGame(game.difficulty);
         return;
@@ -6784,6 +7294,32 @@ function setupInput(canvas) {
         window.RE_MP.sendInput({ type: "iem_fire" });
       } else {
         fireIem(mySide());
+      }
+      return;
+    }
+
+    // 1bis ter) Bouton Drop Renforts — instant, pas de visée
+    if (game.ui.dropBtn && pointInRect(sx, sy, game.ui.dropBtn)) {
+      audio.playSFX("click");
+      const me = mySide();
+      if (game[me].money < DROP_COST || dropCdFor(me) > 0) return;
+      if (game.mode === "mp" && game.mp?.role === "guest") {
+        window.RE_MP.sendInput({ type: "drop_fire" });
+      } else {
+        fireDrop(me);
+      }
+      return;
+    }
+
+    // 1bis quater) Bouton Surge — buff économique instant
+    if (game.ui.surgeBtn && pointInRect(sx, sy, game.ui.surgeBtn)) {
+      audio.playSFX("click");
+      const me = mySide();
+      if (game[me].money < SURGE_COST || surgeCdFor(me) > 0) return;
+      if (game.mode === "mp" && game.mp?.role === "guest") {
+        window.RE_MP.sendInput({ type: "surge_fire" });
+      } else {
+        fireSurge(me);
       }
       return;
     }
@@ -7129,9 +7665,16 @@ function resetGame() {
   game.lightningCooldown = 0;
   game.iem = null;
   game.iemCooldown = 0;
+  game.dropCooldown = 0;
+  game.surgeCooldown = 0;
+  game.pickups = [];
+  game.pickupSpawnTimer = 8; // 1er pickup dispo après 8s pour ne pas spawner trop tôt
+  game.pickupIdSeq = 0;
   if (game.mp) {
     game.mp.enemyLightningCooldown = 0;
     game.mp.enemyIemCooldown = 0;
+    game.mp.enemyDropCooldown = 0;
+    game.mp.enemySurgeCooldown = 0;
     game.mp.snapAccum = 0;
   }
   game.stats = { player: makeStats(), enemy: makeStats() };
@@ -8671,6 +9214,13 @@ function buildMpSnapshot() {
     iem: game.iem ? { ...game.iem } : null,
     cd: { player: game.lightningCooldown, enemy: game.mp?.enemyLightningCooldown || 0 },
     iemCd: { player: game.iemCooldown || 0, enemy: game.mp?.enemyIemCooldown || 0 },
+    dropCd: { player: game.dropCooldown || 0, enemy: game.mp?.enemyDropCooldown || 0 },
+    surgeCd: { player: game.surgeCooldown || 0, enemy: game.mp?.enemySurgeCooldown || 0 },
+    surgeUntil: { player: game.player.surgeUntil || 0, enemy: game.enemy.surgeUntil || 0 },
+    pickups: (game.pickups || []).map((p) => ({
+      id: p.id, x: p.x, y: p.y, value: p.value, age: p.age,
+      consumed: !!p.consumed, consumedBy: p.consumedBy || null, fadeAge: p.fadeAge || 0,
+    })),
     stats: { player: game.stats.player, enemy: game.stats.enemy },
     // Events polish à rejouer côté guest
     events: { dmg: popDmg, shake: popShake },
@@ -8828,6 +9378,21 @@ function applyMpSnapshot(snap) {
     game.iemCooldown = snap.iemCd.player ?? 0;
     if (game.mp) game.mp.enemyIemCooldown = snap.iemCd.enemy ?? 0;
   }
+  if (snap.dropCd) {
+    game.dropCooldown = snap.dropCd.player ?? 0;
+    if (game.mp) game.mp.enemyDropCooldown = snap.dropCd.enemy ?? 0;
+  }
+  if (snap.surgeCd) {
+    game.surgeCooldown = snap.surgeCd.player ?? 0;
+    if (game.mp) game.mp.enemySurgeCooldown = snap.surgeCd.enemy ?? 0;
+  }
+  if (snap.surgeUntil) {
+    game.player.surgeUntil = snap.surgeUntil.player || 0;
+    game.enemy.surgeUntil = snap.surgeUntil.enemy || 0;
+  }
+  if (Array.isArray(snap.pickups)) {
+    game.pickups = snap.pickups.map((p) => ({ ...p }));
+  }
   // Replay des events polish envoyés par le host
   if (snap.events) {
     if (Array.isArray(snap.events.dmg)) {
@@ -8899,6 +9464,12 @@ function handleMpInput(input) {
       break;
     case "iem_fire":
       fireIem(side);
+      break;
+    case "drop_fire":
+      fireDrop(side);
+      break;
+    case "surge_fire":
+      fireSurge(side);
       break;
     case "merge_factory":
       tryMergeFactories(side, input.slotIndex, input.partnerIdx);
