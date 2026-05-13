@@ -1688,6 +1688,15 @@ function spawnDamageNumber(target, value, isHeal) {
   });
   // Cap pour éviter de stocker à l'infini lors de gros affrontements
   if (game.damageNumbers.length > 80) game.damageNumbers.splice(0, game.damageNumbers.length - 80);
+  // En MP host, on accumule pour relayer au guest dans le prochain snapshot.
+  if (game.mode === "mp" && game.mp?.role === "host") {
+    if (!game.mp.outgoingDmg) game.mp.outgoingDmg = [];
+    game.mp.outgoingDmg.push({
+      x: target.x, y: target.y - (target.stats?.radius || 8) - 4,
+      value: Math.round(value), isHeal: !!isHeal, side: target.side,
+    });
+    if (game.mp.outgoingDmg.length > 60) game.mp.outgoingDmg.shift();
+  }
 }
 
 function updateDamageNumbers(dt) {
@@ -1745,6 +1754,13 @@ function triggerCameraShake(magnitude, ttl) {
   const cur = game.camera.shake;
   if (!cur || magnitude > cur.magnitude * (1 - cur.age / cur.ttl)) {
     game.camera.shake = { magnitude, ttl, age: 0 };
+  }
+  // Relai au guest via le prochain snapshot
+  if (game.mode === "mp" && game.mp?.role === "host") {
+    const cu = game.mp.outgoingShake;
+    if (!cu || magnitude > cu.magnitude) {
+      game.mp.outgoingShake = { magnitude, ttl };
+    }
   }
 }
 
@@ -6485,8 +6501,10 @@ function setupInput(canvas) {
           return;
         }
         if (lr.ready && pointInRect(sx, sy, lr.ready)) {
-          const hasOpp = !!(game.mp?.opponent?.username);
-          if (!hasOpp) return; // pas de prêt sans adversaire
+          // On laisse l'utilisateur se mettre prêt même sans opp visible
+          // localement : la détection peut être en retard (poll DB ou sub
+          // pas encore reçue). Le serveur ne démarre la partie que si
+          // les deux côtés sont ready ET qu'il y a bien un guest_id en DB.
           audio.playSFX("click");
           mpToggleReady();
           return;
@@ -8081,25 +8099,24 @@ function drawLobbyRoom(ctx) {
   else statusLine = "Marque-toi prêt quand tu veux lancer la partie.";
   ctx.fillText(statusLine, cx, cardY + playerCardH + 32);
 
-  // Bouton Prêt / Pas prêt
+  // Bouton Prêt / Pas prêt — toujours cliquable. Si pas d'opponent encore
+  // détecté, on colore en doux mais on permet quand même de se marquer
+  // prêt (le serveur ne lance la partie que si guest_id est rempli).
   const myReady = mp.role === "host" ? mp.hostReady : mp.guestReady;
-  const canReady = !!opp; // pas de "prêt" tant qu'il n'y a pas d'adversaire
   const readyW = 220, readyH = 56;
   const readyRect = { x: cx - readyW / 2, y: cardY + playerCardH + 56, w: readyW, h: readyH };
   const readyHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, readyRect);
-  if (!canReady) {
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
-  } else if (myReady) {
+  if (myReady) {
     ctx.fillStyle = readyHover ? "rgba(34,197,94,0.65)" : "rgba(34,197,94,0.45)";
   } else {
     ctx.fillStyle = readyHover ? COLORS.player : COLORS.playerDark;
   }
   roundedRect(ctx, readyRect.x, readyRect.y, readyRect.w, readyRect.h, 10);
   ctx.fill();
-  ctx.strokeStyle = !canReady ? "rgba(255,255,255,0.18)" : (myReady ? COLORS.hpGood : COLORS.player);
+  ctx.strokeStyle = myReady ? COLORS.hpGood : COLORS.player;
   ctx.lineWidth = 2;
   ctx.stroke();
-  ctx.fillStyle = canReady ? "#fff" : COLORS.hudMuted;
+  ctx.fillStyle = "#fff";
   ctx.font = "bold 18px -apple-system, sans-serif";
   ctx.fillText(myReady ? "✓ PRÊT (clic pour annuler)" : "Je suis prêt", readyRect.x + readyRect.w / 2, readyRect.y + readyRect.h / 2);
 
@@ -8505,6 +8522,10 @@ function serializeSide(side) {
         upgrades: { ...f.upgrades }, totalInvested: f.totalInvested, mode: f.mode,
         tier: f.tier || 1,
         spanSlots: f.spanSlots || null,
+        // Polish synchronisé : scale d'apparition + pulse au spawn
+        scale: f.scale,
+        scaleAnim: f.scaleAnim ? { ...f.scaleAnim } : null,
+        spawnPulse: f.spawnPulse,
       };
     }),
     wallTurrets: s.wallSlots.map((w) => {
@@ -8516,6 +8537,11 @@ function serializeSide(side) {
 }
 
 function buildMpSnapshot() {
+  // Pop les events accumulés depuis le dernier snapshot (damage numbers,
+  // camera shakes, événements polish) pour les transmettre au guest.
+  const popDmg = game.mp?.outgoingDmg || [];
+  const popShake = game.mp?.outgoingShake || null;
+  if (game.mp) { game.mp.outgoingDmg = []; game.mp.outgoingShake = null; }
   return {
     t: game.time,
     player: serializeSide("player"),
@@ -8529,6 +8555,17 @@ function buildMpSnapshot() {
         y: u.y,
         hp: u.hp,
         maxHp: u.maxHp,
+        // On embarque les stats réellement applicables à cette unité
+        // (incluant tier multiplier + upgrades) pour que le hover range
+        // sur le guest reflète la VRAIE portée et que les sprites sachent
+        // s'ils peuvent toucher l'air.
+        stats: u.stats ? {
+          hp: u.stats.hp, damage: u.stats.damage, speed: u.stats.speed,
+          range: u.stats.range, radius: u.stats.radius,
+          attackInterval: u.stats.attackInterval, killReward: u.stats.killReward,
+          layer: u.stats.layer, canTargetAir: !!u.stats.canTargetAir,
+          isMedic: !!u.stats.isMedic, tier: u.stats.tier || 1,
+        } : null,
       })),
     attackFx: game.attackFx.slice(-40).map((fx) => ({ ...fx })),
     explosions: game.explosions.slice(-12).map((ex) => ({ ...ex })),
@@ -8540,14 +8577,15 @@ function buildMpSnapshot() {
       x: p.x, y: p.y, angle: p.angle,
       age: p.age, ttl: p.ttl, profile: p.profile, side: p.side,
     })),
-    flashes: game.flashes.slice(-30).map((f) => ({
-      x: f.x, y: f.y, age: f.age, ttl: f.ttl, kind: f.kind, side: f.side,
-    })),
+    // Spread complet pour conserver tx/ty (heal), vx/vy/size (debris), etc.
+    flashes: game.flashes.slice(-40).map((f) => ({ ...f })),
     lightning: game.lightning ? { ...game.lightning, segments: game.lightning.segments?.slice() || [] } : null,
     iem: game.iem ? { ...game.iem } : null,
     cd: { player: game.lightningCooldown, enemy: game.mp?.enemyLightningCooldown || 0 },
     iemCd: { player: game.iemCooldown || 0, enemy: game.mp?.enemyIemCooldown || 0 },
     stats: { player: game.stats.player, enemy: game.stats.enemy },
+    // Events polish à rejouer côté guest
+    events: { dmg: popDmg, shake: popShake },
     gameOver: game.gameOver ? { winner: game.gameOver.winner } : null,
   };
 }
@@ -8574,7 +8612,8 @@ function applySerializedSide(side, ser) {
       const baseType = FACTORY_TYPES[inc.typeId];
       if (!baseType) continue;
       slot.coveredBy = null;
-      if (!slot.factory) {
+      const isNew = !slot.factory;
+      if (isNew) {
         slot.factory = {
           typeId: inc.typeId, side, hp: inc.hp, prodTimer: 0,
           level: inc.level || 1, upgrades: inc.upgrades || defaultUpgrades(),
@@ -8582,6 +8621,11 @@ function applySerializedSide(side, ser) {
           mode: inc.mode || "attack",
           tier: inc.tier || 1,
           spanSlots: inc.spanSlots || [i],
+          // Anim de pose sur le guest même si c'est l'host qui a posé la
+          // factory (sinon elle apparaît instantanément sans pop juicy).
+          scale: 0.1,
+          scaleAnim: { from: 0.1, to: 1, age: 0, ttl: 0.30 },
+          spawnPulse: null,
         };
       } else {
         slot.factory.typeId = inc.typeId;
@@ -8592,6 +8636,11 @@ function applySerializedSide(side, ser) {
         slot.factory.mode = inc.mode || slot.factory.mode;
         slot.factory.tier = inc.tier || 1;
         slot.factory.spanSlots = inc.spanSlots || [i];
+        // Détection d'un spawn d'unité côté host : le pulse passe de null
+        // à 0 dans le snapshot. On déclenche le pulse local.
+        if (inc.spawnPulse === 0 && (slot.factory.spawnPulse == null || slot.factory.spawnPulse > 0.10)) {
+          slot.factory.spawnPulse = 0;
+        }
       }
     }
   }
@@ -8646,6 +8695,9 @@ function applyMpSnapshot(snap) {
       const factoryDef = FACTORY_TYPES[u.typeId];
       const unitDef = UNIT_TYPES[factoryDef?.unitType] || UNIT_TYPES[u.typeId];
       if (!unitDef) continue;
+      // Si le snapshot embarque les stats (avec tier + upgrades), on les
+      // utilise tel quel ; sinon fallback sur les stats de base.
+      const stats = u.stats ? { ...u.stats } : { ...unitDef };
       game.units.push({
         side: u.side,
         typeId: u.typeId,
@@ -8654,7 +8706,7 @@ function applyMpSnapshot(snap) {
         y: u.y,
         hp: u.hp,
         maxHp: u.maxHp,
-        stats: { ...unitDef },
+        stats,
         target: null,
         attackCooldown: 0,
         wanderY: null,
@@ -8687,6 +8739,32 @@ function applyMpSnapshot(snap) {
   if (snap.iemCd) {
     game.iemCooldown = snap.iemCd.player ?? 0;
     if (game.mp) game.mp.enemyIemCooldown = snap.iemCd.enemy ?? 0;
+  }
+  // Replay des events polish envoyés par le host
+  if (snap.events) {
+    if (Array.isArray(snap.events.dmg)) {
+      for (const e of snap.events.dmg) {
+        game.damageNumbers.push({
+          x: (e.x || 0) + (Math.random() - 0.5) * 8,
+          y: e.y || 0,
+          vx: (Math.random() - 0.5) * 18,
+          vy: -52 - Math.random() * 14,
+          value: e.value || 1,
+          isHeal: !!e.isHeal,
+          side: e.side,
+          age: 0, ttl: 0.95,
+        });
+      }
+      if (game.damageNumbers.length > 80) game.damageNumbers.splice(0, game.damageNumbers.length - 80);
+    }
+    if (snap.events.shake) {
+      const s = snap.events.shake;
+      // Trigger sans relai (on est déjà côté guest, pas la peine de re-broadcast)
+      const cur = game.camera.shake;
+      if (!cur || s.magnitude > cur.magnitude * (1 - cur.age / cur.ttl)) {
+        game.camera.shake = { magnitude: s.magnitude, ttl: s.ttl, age: 0 };
+      }
+    }
   }
   if (snap.stats) {
     // Snapshot des stats (host autoritaire) — permet au guest d'avoir un
