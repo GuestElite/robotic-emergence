@@ -349,6 +349,8 @@ const audio = {
   musicNodes: [],
   bgmAudio: null,
   bgmVolume: 0.22,     // référence interne (mixée avec musicVolume)
+  menuMusic: null,
+  menuMusicVolume: 0.30,  // un peu plus haute que la BGM in-game car écran statique
   ambientAudio: null,
   ambientVolume: 0.16, // sous la BGM, juste assez pour donner vie au biome
   wavBuffers: {},
@@ -509,6 +511,24 @@ const audio = {
       try { this.bgmAudio.pause(); this.bgmAudio.currentTime = 0; } catch (_) {}
     }
   },
+  // ── Menu music (Ride The Wind, joué UNIQUEMENT sur l'écran menu)
+  // Séparé de la BGM in-game pour pouvoir basculer proprement entre les 2
+  // sans jamais les superposer.
+  startMenuMusic() {
+    if (!this.musicEnabled) return;
+    if (this.menuMusic && !this.menuMusic.paused) return;
+    if (!this.menuMusic) {
+      this.menuMusic = new Audio("../11-sound-design/music/bgm-menu.mp3");
+      this.menuMusic.loop = true;
+    }
+    this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
+    this.menuMusic.play().catch(() => { /* autoplay bloqué — réessaie au prochain clic */ });
+  },
+  stopMenuMusic() {
+    if (this.menuMusic) {
+      try { this.menuMusic.pause(); this.menuMusic.currentTime = 0; } catch (_) {}
+    }
+  },
   // ── Ambient (vent / souffle de biome, loopé sous la BGM)
   startAmbient(biome) {
     if (!this.musicEnabled) return;  // suit le toggle musique pour V1
@@ -534,11 +554,12 @@ const audio = {
   },
   setMusicEnabled(on) {
     this.musicEnabled = on;
-    if (on && game.screen === "playing") {
-      this.startMusic();
-      // Ambient continu désactivé — joué seulement pendant tumbleweed
+    if (on) {
+      if (game.screen === "playing") this.startMusic();
+      else if (game.screen === "menu") this.startMenuMusic();
     } else {
       this.stopMusic();
+      this.stopMenuMusic();
       this.stopAmbient();
     }
   },
@@ -546,6 +567,7 @@ const audio = {
   setMusicVolume(v) {
     this.musicVolume = Math.max(0, Math.min(1, v));
     if (this.bgmAudio) this.bgmAudio.volume = this.bgmVolume * this.musicVolume;
+    if (this.menuMusic) this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
     if (this.ambientAudio) this.ambientAudio.volume = this.ambientVolume * this.musicVolume;
   },
   setSfxVolume(v) { this.sfxVolume = Math.max(0, Math.min(1, v)); },
@@ -6935,6 +6957,7 @@ function setupInput(canvas) {
       const mr = game.ui.menuRects;
       if (!mr) return;
       audio.ensureCtx(); // débloque l'AudioContext sur le premier clic utilisateur
+      audio.startMenuMusic(); // autoplay bloqué jusqu'au 1er clic — démarre ici
       // Difficulté
       for (const d of mr.diff) {
         if (pointInRect(sx, sy, d.rect)) {
@@ -7919,6 +7942,8 @@ function startGame(difficulty) {
   resetGame();
   game.screen = "playing";
   saveSettings();
+  // On bascule de menu music → BGM in-game (jamais les 2 en même temps)
+  audio.stopMenuMusic();
   audio.startMusic();
   // Ambient continu désactivé : le son ambient est désormais joué ponctuellement
   // lors d'événements (ex. tumbleweed désert). Voir spawnTumbleweed.
@@ -7929,6 +7954,7 @@ function goToMenu() {
   game.gameOver = null;
   audio.stopMusic();
   audio.stopAmbient();
+  audio.startMenuMusic();
   // Si on revient au menu depuis un lobby/partie multi, on quitte proprement le canal
   if (game.mp && window.RE_MP) {
     try { window.RE_MP.leave(); } catch {}
@@ -8041,6 +8067,7 @@ async function spectateLobby(lobbyMeta) {
   applyTeamSkin();
   resetGame();
   game.screen = "playing";
+  audio.stopMenuMusic();
   audio.startMusic();
 }
 
@@ -8342,6 +8369,7 @@ function startMpGame() {
     const maxScroll = Math.max(0, CONFIG.W - CONFIG.CANVAS_W);
     game.camera.x = maxScroll;
   }
+  audio.stopMenuMusic();
   audio.startMusic();
   // Ambient continu désactivé (cf. startGame solo)
 }

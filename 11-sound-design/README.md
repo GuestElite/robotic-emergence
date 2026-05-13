@@ -15,7 +15,8 @@ sfx/                      Effets sonores courts
 └── effect-lightning.wav      Foudre / impact magique (crack + rumble)
 
 music/
-└── bgm-pathfinder.mp3         Musique de fond — "Pathfinder" par Scott Buckley (CC-BY 4.0)
+├── bgm-menu.mp3                Musique du menu — "Ride The Wind" par Scott Buckley (CC-BY 4.0)
+└── bgm-pathfinder.mp3          Musique de fond in-game — "Pathfinder" par Scott Buckley (CC-BY 4.0)
 
 scripts/
 └── generate_sounds.py         Synthèse procédurale (stdlib uniquement)
@@ -45,6 +46,9 @@ Le script est déterministe (seeds fixes) → résultats reproductibles.
 
 ## Crédits musique
 
+> **"Ride The Wind"** par Scott Buckley — released under CC-BY 4.0.
+> [www.scottbuckley.com.au](https://www.scottbuckley.com.au)
+>
 > **"Pathfinder"** par Scott Buckley — released under CC-BY 4.0.
 > [www.scottbuckley.com.au](https://www.scottbuckley.com.au)
 
