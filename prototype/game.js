@@ -3112,13 +3112,12 @@ function setupInput(canvas) {
       return;
     }
 
-    // 2) Boutons de build (coords ÉCRAN) ?
+    // 2) Boutons de build (coords ÉCRAN) — toggle libre, l'argent est vérifié au placement
     for (const btn of game.ui.buttons) {
       if (pointInRect(sx, sy, btn)) {
-        const cost = btn.type === "turret" ? TURRET_TYPE.cost : FACTORY_TYPES[btn.type].cost;
-        if (game.player.money < cost) return;
         game.ui.selectedBuildType =
           game.ui.selectedBuildType === btn.type ? null : btn.type;
+        audio.playSFX("click");
         return;
       }
     }
