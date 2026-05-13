@@ -26,6 +26,14 @@
 -- 1. Schéma
 -- -----------------------------------------------------------------------------
 
+-- Élargit la contrainte type pour accepter les nouvelles valeurs
+-- (originale : CHECK (type = 'team_color') — trop restrictive)
+ALTER TABLE re_shop_items
+  DROP CONSTRAINT IF EXISTS re_shop_items_type_check;
+ALTER TABLE re_shop_items
+  ADD CONSTRAINT re_shop_items_type_check
+  CHECK (type IN ('team_color', 'unit_skin', 'skin_pack'));
+
 ALTER TABLE re_shop_items
   ADD COLUMN IF NOT EXISTS unit_type     TEXT,
   ADD COLUMN IF NOT EXISTS tier          INT,

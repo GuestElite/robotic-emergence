@@ -29,3 +29,7 @@ venv/
 
 # Vercel CLI
 .vercel
+
+# Secrets (DB / Supabase Management API)
+.env
+.env.local
