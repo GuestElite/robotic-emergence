@@ -5756,17 +5756,24 @@ function startTutorial() {
   audio.startMusic();
 }
 
-// Bannière du tutoriel — placée en haut-gauche sous le HUD pour ne pas
-// chevaucher la map ni les unités. Le coin haut-droit est libre du fait
-// du surrender / settings, et la minimap est au centre.
+// Tutoriel — modal centré qui pause visuellement la partie : un voile sombre
+// est appliqué sur tout l'écran, puis la carte d'explication apparaît au
+// milieu. Aucun élément de jeu ne peut le chevaucher puisque c'est dessiné
+// en dernier dans render() et que le voile recouvre déjà tout le reste.
 function drawTutorialOverlay(ctx) {
   if (!game.tutorial?.active) { game.ui.tutorialRects = null; return; }
   const step = TUTORIAL_STEPS[game.tutorial.step];
   if (!step) { game.tutorial.active = false; return; }
 
-  const W = 460, H = 190; // 130 → 190 pour ne plus que texte et boutons se chevauchent
-  const x = 16;
-  const y = CONFIG.HUD_H + 8;
+  // Voile assombrissant (rend la carte centrale totalement lisible)
+  ctx.save();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.62)";
+  ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+  ctx.restore();
+
+  const W = 540, H = 280;
+  const x = (CONFIG.CANVAS_W - W) / 2;
+  const y = (CONFIG.H - H) / 2;
 
   ctx.save();
   ctx.fillStyle = "rgba(15,23,42,0.94)";
