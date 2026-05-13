@@ -18,7 +18,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 from palette import (
-    ACCENT, ENEMY, GROUND, METAL, PLAYER, TRANSPARENT,
+    ACCENT, ENEMY, GOLD, GROUND, METAL, PLAYER, TRANSPARENT,
     antenna, drop_shadow, new_canvas, rivets, rounded_rect_with_shading,
     side_palette, turret, vertical_gradient,
 )
@@ -218,34 +218,116 @@ def render_factory_heavy(side: str) -> Image.Image:
 # 4. UNIT LIGHT — 48x48, robot bipède agile
 # ===========================================================================
 
-def render_unit_light(side: str) -> Image.Image:
+def render_unit_light(side: str, tier: int = 0, pal_override: dict = None) -> Image.Image:
+    """Light unit. Tiers (player only):
+       0 = bleu base / silhouette de base
+       1 = Emerald + casque tactique + backpack + antenne dorsale (Recon)
+       2 = Royal + cape + casque ailé + bouclier + canon long doré (Royal Guard)"""
     W = H = 48
-    pal = side_palette(side)
+    pal = pal_override if pal_override is not None else side_palette(side, tier)
+    is_t1 = tier == 1
+    is_t2 = tier == 2
     img, d = new_canvas(W, H)
-
     cx, cy = W // 2, H // 2
 
-    # Jambes / pieds (deux taches sombres)
+    # === [Layer 0] CAPE arrière (T2 seulement) — passe derrière le perso ===
+    if is_t2:
+        cape_pts = [
+            (cx - 14, cy - 4), (cx + 14, cy - 4),
+            (cx + 12, cy + 16), (cx - 12, cy + 16),
+        ]
+        d.polygon(cape_pts, fill=pal["dark"], outline=ACCENT["outline"])
+        # Plis verticaux
+        for x_off in (-6, 0, 6):
+            d.line((cx + x_off, cy - 2, cx + x_off, cy + 14),
+                   fill=(40, 20, 80, 255), width=1)
+        # Liseré doré au bord bas
+        d.line((cx - 12, cy + 16, cx + 12, cy + 16), fill=GOLD["light"], width=1)
+
+    # === [Layer 1] JAMBES (commune) ===
     d.ellipse((cx - 14, cy + 8, cx - 4, cy + 18), fill=METAL["darkest"])
     d.ellipse((cx + 4, cy + 8, cx + 14, cy + 18), fill=METAL["darkest"])
 
-    # Torse (losange/octogone coloré)
+    # === [Layer 2] BACKPACK arrière (T1 seulement) — visible derrière le torse ===
+    if is_t1:
+        d.rectangle((cx - 4, cy - 16, cx + 4, cy - 10),
+                    fill=pal["dark"], outline=ACCENT["outline"])
+        d.line((cx, cy - 16, cx, cy - 10), fill=pal["light"], width=1)
+        # Sangle backpack visible (rectangle en travers du torse)
+        d.line((cx - 12, cy - 2, cx + 12, cy - 2), fill=METAL["darkest"], width=1)
+
+    # === [Layer 3] TORSE (commune, couleur du tier) ===
     d.polygon([(cx - 12, cy - 4), (cx - 6, cy - 14), (cx + 6, cy - 14),
                (cx + 12, cy - 4), (cx + 10, cy + 8), (cx - 10, cy + 8)],
               fill=pal["base"], outline=ACCENT["outline"])
-    # Reflet épaule
     d.polygon([(cx - 10, cy - 4), (cx - 6, cy - 12), (cx, cy - 12), (cx - 4, cy - 4)],
               fill=pal["light"])
 
-    # Tête (petit dôme)
-    d.ellipse((cx - 5, cy - 18, cx + 5, cy - 8), fill=pal["dark"],
-              outline=ACCENT["outline"])
-    d.ellipse((cx - 2, cy - 16, cx + 2, cy - 12), fill=pal["glow"])
+    # === [Layer 4] TÊTE — casque pour T1/T2, dôme rond pour T0 ===
+    if is_t1 or is_t2:
+        # Casque tactique large (rectangle arrondi)
+        d.rounded_rectangle((cx - 7, cy - 18, cx + 7, cy - 8), radius=4,
+                            fill=pal["dark"], outline=ACCENT["outline"])
+        # Visière noire (bandeau)
+        d.rectangle((cx - 6, cy - 14, cx + 6, cy - 10), fill=METAL["darkest"])
+        # Reflet glow sur la visière (œil cyclope)
+        d.ellipse((cx - 1, cy - 13, cx + 2, cy - 11), fill=pal["glow"])
+        # Mini reflet blanc
+        d.ellipse((cx, cy - 13, cx + 1, cy - 12), fill=ACCENT["white"])
+    else:
+        # Tête ronde classique (T0)
+        d.ellipse((cx - 5, cy - 18, cx + 5, cy - 8), fill=pal["dark"],
+                  outline=ACCENT["outline"])
+        d.ellipse((cx - 2, cy - 16, cx + 2, cy - 12), fill=pal["glow"])
 
-    # Arme laser (petit canon devant)
-    d.rectangle((cx + 6, cy - 6, cx + 16, cy - 2),
-                fill=METAL["darkest"], outline=ACCENT["outline"])
-    d.rectangle((cx + 14, cy - 5, cx + 16, cy - 3), fill=ACCENT["warning"])
+    # === [Layer 5] ARME ===
+    if is_t2:
+        # Canon long premium (étendu jusqu'à cx+20, +4px de long)
+        d.rectangle((cx + 6, cy - 6, cx + 20, cy - 2),
+                    fill=METAL["darkest"], outline=ACCENT["outline"])
+        # Bouche dorée
+        d.rectangle((cx + 18, cy - 5, cx + 20, cy - 3), fill=GOLD["light"])
+        # Reflet doré sur le dessus du canon (liseré)
+        d.line((cx + 7, cy - 6, cx + 19, cy - 6), fill=GOLD["dark"], width=1)
+        # Petit chargeur (rectangle au-dessus du canon)
+        d.rectangle((cx + 8, cy - 9, cx + 14, cy - 6), fill=METAL["dark"])
+    else:
+        # Arme laser classique (T0 et T1)
+        d.rectangle((cx + 6, cy - 6, cx + 16, cy - 2),
+                    fill=METAL["darkest"], outline=ACCENT["outline"])
+        d.rectangle((cx + 14, cy - 5, cx + 16, cy - 3),
+                    fill=pal["glow"] if is_t1 else ACCENT["warning"])
+
+    # === [Layer 6] ANTENNE dorsale (T1) ===
+    if is_t1:
+        d.line((cx - 2, cy - 18, cx - 2, cy - 24), fill=METAL["darkest"], width=1)
+        d.ellipse((cx - 3, cy - 25, cx - 1, cy - 23), fill=pal["glow"])
+        # Accents dorés subtils T1 : bord doré bas de la visière + ceinture mince
+        d.line((cx - 6, cy - 10, cx + 6, cy - 10), fill=GOLD["light"], width=1)
+        d.line((cx - 10, cy, cx + 10, cy), fill=GOLD["dark"], width=1)
+
+    # === [Layer 7] Accessoires premium (T2) ===
+    if is_t2:
+        # AILES dorées sur les côtés du casque (façon Mercury)
+        d.polygon([(cx - 7, cy - 16), (cx - 13, cy - 18), (cx - 7, cy - 13)],
+                  fill=GOLD["light"], outline=ACCENT["outline"])
+        d.polygon([(cx + 7, cy - 16), (cx + 13, cy - 18), (cx + 7, cy - 13)],
+                  fill=GOLD["light"], outline=ACCENT["outline"])
+        # Reflet sur les ailes
+        d.line((cx - 7, cy - 15, cx - 12, cy - 17), fill=GOLD["highlight"], width=1)
+        d.line((cx + 7, cy - 15, cx + 12, cy - 17), fill=GOLD["highlight"], width=1)
+
+        # BOUCLIER rond doré (sur le bras gauche du perso = côté gauche du sprite)
+        d.ellipse((cx - 18, cy - 4, cx - 10, cy + 4),
+                  fill=GOLD["base"], outline=ACCENT["outline"])
+        d.ellipse((cx - 16, cy - 2, cx - 12, cy + 2), fill=GOLD["light"])
+        d.ellipse((cx - 15, cy - 1, cx - 13, cy + 1), fill=ACCENT["white"])
+
+        # LISERÉ DORÉ sur les épaulettes (bords du torse)
+        d.line((cx - 12, cy - 4, cx - 6, cy - 14), fill=GOLD["light"], width=1)
+        d.line((cx + 12, cy - 4, cx + 6, cy - 14), fill=GOLD["light"], width=1)
+        # Ceinture dorée
+        d.line((cx - 10, cy, cx + 10, cy), fill=GOLD["light"], width=1)
 
     return drop_shadow(img, offset=(1, 2), blur=2, opacity=110)
 
@@ -254,40 +336,396 @@ def render_unit_light(side: str) -> Image.Image:
 # 5. UNIT HEAVY — 64x64, tank chenillé
 # ===========================================================================
 
-def render_unit_heavy(side: str) -> Image.Image:
+def render_unit_heavy(side: str, tier: int = 0, pal_override: dict = None) -> Image.Image:
+    """Heavy unit. Tiers (player only):
+       0 = bleu base / silhouette de base
+       1 = Emerald + plaque blindage frontale + radar dorsal + pods latéraux
+       2 = Royal + mega-tourelle + 4 lance-roquettes + crête centrale + échappements"""
     W = H = 64
-    pal = side_palette(side)
+    pal = pal_override if pal_override is not None else side_palette(side, tier)
+    is_t1 = tier == 1
+    is_t2 = tier == 2
     img, d = new_canvas(W, H)
-
     cx, cy = W // 2, H // 2
 
-    # Chenilles (G/D)
+    # === [Layer 1] CHENILLES ===
     for x_off in (-22, 14):
         d.rounded_rectangle((cx + x_off, cy - 22, cx + x_off + 8, cy + 22),
                             radius=2, fill=METAL["darkest"],
                             outline=ACCENT["outline"])
-        # Crans
         for y in range(cy - 20, cy + 21, 4):
             d.line((cx + x_off + 1, y, cx + x_off + 7, y), fill=METAL["light"], width=1)
 
-    # Châssis (large rectangle blindé)
+    # === [Layer 1.5] PODS LATÉRAUX (T1 seulement) — montés sur l'arrière des chenilles ===
+    if is_t1:
+        # Pod gauche
+        d.rounded_rectangle((cx - 26, cy + 4, cx - 22, cy + 12), radius=1,
+                            fill=pal["dark"], outline=ACCENT["outline"])
+        d.ellipse((cx - 26, cy + 5, cx - 23, cy + 8), fill=pal["glow"])
+        # Pod droit
+        d.rounded_rectangle((cx + 22, cy + 4, cx + 26, cy + 12), radius=1,
+                            fill=pal["dark"], outline=ACCENT["outline"])
+        d.ellipse((cx + 23, cy + 5, cx + 26, cy + 8), fill=pal["glow"])
+
+    # === [Layer 2] CHÂSSIS ===
     body = (cx - 14, cy - 16, cx + 14, cy + 16)
     rounded_rect_with_shading(d, body,
                               color_base=pal["base"], color_dark=METAL["darkest"],
                               color_light=pal["light"], radius=3,
                               outline=ACCENT["outline"])
 
-    # Tourelle centrale grosse
-    turret(d, cx, cy, 9, pal, "up")
+    # === [Layer 3] PLAQUE DE BLINDAGE FRONTALE (T1 et T2) ===
+    if is_t1 or is_t2:
+        # Plaque rectangulaire ajoutée à l'avant du châssis (haut du sprite)
+        d.rectangle((cx - 12, cy - 20, cx + 12, cy - 14),
+                    fill=pal["dark"], outline=ACCENT["outline"])
+        # Reflet sur la plaque
+        d.line((cx - 11, cy - 19, cx + 11, cy - 19), fill=pal["light"], width=1)
+        # 4 boulons décoratifs — dorés pour T1 (subtils), restent gris sinon
+        bolt_color = GOLD["light"] if is_t1 else METAL["light"]
+        for dx_ in (-10, -4, 4, 10):
+            d.ellipse((cx + dx_ - 1, cy - 18, cx + dx_ + 1, cy - 16),
+                      fill=bolt_color)
+    if is_t1:
+        # Bande dorée fine sur le bas de la plaque de blindage
+        d.line((cx - 12, cy - 14, cx + 12, cy - 14), fill=GOLD["light"], width=1)
 
-    # Reflet + voyant arrière
-    d.rectangle((cx - 4, cy + 12, cx + 4, cy + 14), fill=ACCENT["warning"])
+    # === [Layer 4] TOURELLE — taille selon tier ===
+    if is_t2:
+        # Mega-tourelle élargie
+        turret(d, cx, cy, 12, pal, "up")
+        # Crête centrale ailée (façon couronne sur le tank)
+        d.polygon([(cx - 6, cy - 4), (cx, cy - 10), (cx + 6, cy - 4)],
+                  fill=GOLD["light"], outline=ACCENT["outline"])
+        d.ellipse((cx - 1, cy - 9, cx + 1, cy - 7), fill=ACCENT["white"])
+    else:
+        turret(d, cx, cy, 9, pal, "up")
+
+    # === [Layer 5] RADAR DORSAL (T1 seulement) ===
+    if is_t1:
+        # Petit dôme radar à l'arrière (bas du sprite)
+        d.ellipse((cx - 4, cy + 8, cx + 4, cy + 14),
+                  fill=METAL["dark"], outline=ACCENT["outline"])
+        d.ellipse((cx - 2, cy + 9, cx + 2, cy + 12), fill=pal["glow"])
+        # Antenne au-dessus
+        d.line((cx, cy + 8, cx, cy + 4), fill=METAL["darkest"], width=1)
+    else:
+        # Voyant arrière classique
+        d.rectangle((cx - 4, cy + 12, cx + 4, cy + 14),
+                    fill=GOLD["light"] if is_t2 else ACCENT["warning"])
+
+    # === [Layer 6] 4 LANCE-ROQUETTES aux coins (T2 seulement) ===
+    if is_t2:
+        # 4 launchers cylindriques aux 4 coins du châssis
+        for cx_l, cy_l in [(cx - 11, cy - 13), (cx + 9, cy - 13),
+                            (cx - 11, cy + 9), (cx + 9, cy + 9)]:
+            d.rectangle((cx_l - 1, cy_l - 1, cx_l + 3, cy_l + 4),
+                        fill=METAL["darkest"], outline=ACCENT["outline"])
+            # Pointe dorée de la roquette
+            d.rectangle((cx_l - 1, cy_l - 1, cx_l + 3, cy_l + 1),
+                        fill=GOLD["light"])
+
+    # === [Layer 7] ÉCHAPPEMENTS DOUBLÉS (T2 seulement) ===
+    if is_t2:
+        # 2 cheminées d'échappement arrière (vues du dessus = petits ovales)
+        d.ellipse((cx - 8, cy + 15, cx - 4, cy + 19),
+                  fill=METAL["dark"], outline=ACCENT["outline"])
+        d.ellipse((cx + 4, cy + 15, cx + 8, cy + 19),
+                  fill=METAL["dark"], outline=ACCENT["outline"])
+        # Reflet doré au sommet
+        d.line((cx - 8, cy + 15, cx - 4, cy + 15), fill=GOLD["light"], width=1)
+        d.line((cx + 4, cy + 15, cx + 8, cy + 15), fill=GOLD["light"], width=1)
+
+    # === [Layer 8] Liseré + accents premium (T2) ===
+    if is_t2:
+        # Liseré doré sur les bordures du châssis
+        d.line((cx - 13, cy - 15, cx + 13, cy - 15), fill=GOLD["light"], width=1)
+        d.line((cx - 13, cy + 15, cx + 13, cy + 15), fill=GOLD["dark"], width=1)
 
     return drop_shadow(img, offset=(2, 2), blur=2, opacity=120)
 
 
 # ===========================================================================
-# 5b. FACTORY AIR — 128x128, hangar industriel à toit ouvert
+# 5a. UNIT SWARMER — 40x40, drone insectoïde rapide
+# ===========================================================================
+# Rapatrié depuis preview_swarmer_sniper.py + ajout param tier.
+
+def render_unit_swarmer(side: str, tier: int = 0, pal_override: dict = None) -> Image.Image:
+    """Swarmer unit. Tiers (player only):
+       0 = 6 pattes / silhouette de base
+       1 = Emerald + 8 pattes + antenne dorsale + mandibules allongées (Soldat)
+       2 = Royal + 10 pattes + aiguillon arrière + ailes translucides + couronne + œil triple (Reine)"""
+    W = H = 40
+    pal = pal_override if pal_override is not None else side_palette(side, tier)
+    is_t1 = tier == 1
+    is_t2 = tier == 2
+    img, d = new_canvas(W, H)
+    cx, cy = W // 2, H // 2
+
+    # === [Layer 0] AILES translucides (T2) — passent derrière le corps ===
+    if is_t2:
+        # 2 ailes en losange semi-transparentes (haut-gauche et haut-droite)
+        wing_l = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        wld = ImageDraw.Draw(wing_l, "RGBA")
+        wld.polygon([(cx - 2, cy - 4), (cx - 14, cy - 12), (cx - 18, cy - 6),
+                     (cx - 10, cy - 2)],
+                    fill=(pal["light"][0], pal["light"][1], pal["light"][2], 110),
+                    outline=(255, 255, 255, 180))
+        wld.polygon([(cx + 2, cy - 4), (cx + 14, cy - 12), (cx + 18, cy - 6),
+                     (cx + 10, cy - 2)],
+                    fill=(pal["light"][0], pal["light"][1], pal["light"][2], 110),
+                    outline=(255, 255, 255, 180))
+        img = Image.alpha_composite(img, wing_l)
+        d = ImageDraw.Draw(img, "RGBA")
+
+    # === [Layer 1] AIGUILLON arrière (T2) — queue pointue vers la gauche (arrière) ===
+    if is_t2:
+        d.polygon([(cx - 8, cy - 1), (cx - 8, cy + 1), (cx - 18, cy)],
+                  fill=METAL["darkest"], outline=ACCENT["outline"])
+        d.polygon([(cx - 16, cy), (cx - 18, cy - 1), (cx - 18, cy + 1)],
+                  fill=GOLD["light"])  # pointe dorée
+
+    # === [Layer 2] PATTES — nombre selon tier ===
+    leg_len = 12
+    if is_t2:
+        # 10 pattes radiant
+        leg_angles = (25, 65, 105, 145, 195, 235, 275, 315, 5, 165)
+    elif is_t1:
+        # 8 pattes radiant
+        leg_angles = (35, 80, 125, 170, 215, 260, 305, 350)
+    else:
+        # 6 pattes (défaut)
+        leg_angles = (35, 95, 145, 215, 265, 325)
+
+    for angle_deg in leg_angles:
+        rad = math.radians(angle_deg)
+        x_end = int(cx + math.cos(rad) * leg_len)
+        y_end = int(cy + math.sin(rad) * leg_len)
+        d.line((cx, cy, x_end, y_end), fill=METAL["darkest"], width=2)
+        # Tip — doré pour T2, gris sinon
+        tip_color = GOLD["light"] if is_t2 else METAL["light"]
+        d.ellipse((x_end - 1, y_end - 1, x_end + 1, y_end + 1), fill=tip_color)
+
+    # === [Layer 3] CORPS hexagonal central ===
+    r = 8
+    hex_pts = []
+    for i in range(6):
+        ang = math.radians(60 * i + 30)
+        hex_pts.append((cx + math.cos(ang) * r, cy + math.sin(ang) * r))
+    d.polygon(hex_pts, fill=pal["base"], outline=ACCENT["outline"])
+
+    # Reflet supérieur
+    r2 = 4
+    hl_pts = []
+    for i in range(6):
+        ang = math.radians(60 * i + 30)
+        hl_pts.append((cx + math.cos(ang) * r2, cy - 2 + math.sin(ang) * r2))
+    d.polygon(hl_pts, fill=pal["light"])
+
+    # === [Layer 4] ŒIL frontal — simple ou triple selon tier ===
+    if is_t2:
+        # ŒIL TRIPLE (3 yeux côte à côte vers l'avant)
+        for dy_ in (-3, 0, 3):
+            d.ellipse((cx + 3, cy + dy_ - 1, cx + 7, cy + dy_ + 2),
+                      fill=GOLD["light"], outline=ACCENT["outline"])
+            d.ellipse((cx + 5, cy + dy_, cx + 6, cy + dy_ + 1), fill=ACCENT["outline"])
+    else:
+        # Œil simple
+        d.ellipse((cx + 3, cy - 2, cx + 8, cy + 3),
+                  fill=pal["glow"], outline=ACCENT["outline"])
+        d.ellipse((cx + 5, cy, cx + 6, cy + 1), fill=ACCENT["outline"])
+
+    # === [Layer 5] MANDIBULES — allongées pour T1/T2 ===
+    if is_t1:
+        # Mandibules allongées (16 au lieu de 12)
+        d.line((cx + 8, cy - 1, cx + 16, cy - 4), fill=METAL["darkest"], width=1)
+        d.line((cx + 8, cy + 2, cx + 16, cy + 5), fill=METAL["darkest"], width=1)
+    elif is_t2:
+        # Mandibules dorées allongées + recourbées
+        d.line((cx + 8, cy - 1, cx + 16, cy - 5), fill=GOLD["base"], width=2)
+        d.line((cx + 8, cy + 2, cx + 16, cy + 6), fill=GOLD["base"], width=2)
+        d.ellipse((cx + 15, cy - 6, cx + 17, cy - 4), fill=GOLD["light"])
+        d.ellipse((cx + 15, cy + 5, cx + 17, cy + 7), fill=GOLD["light"])
+    else:
+        # Mandibules courtes
+        d.line((cx + 8, cy - 1, cx + 12, cy - 4), fill=METAL["darkest"], width=1)
+        d.line((cx + 8, cy + 2, cx + 12, cy + 5), fill=METAL["darkest"], width=1)
+
+    # === [Layer 6] ANTENNE dorsale (T1) ===
+    if is_t1:
+        # Antenne au sommet du corps hexagonal
+        d.line((cx - 4, cy - 7, cx - 6, cy - 13), fill=METAL["darkest"], width=1)
+        d.ellipse((cx - 7, cy - 14, cx - 5, cy - 12), fill=GOLD["light"])
+        # Petite seconde antenne (tip doré)
+        d.line((cx + 4, cy - 7, cx + 6, cy - 13), fill=METAL["darkest"], width=1)
+        d.ellipse((cx + 5, cy - 14, cx + 7, cy - 12), fill=GOLD["light"])
+        # Accent doré T1 : anneau hexagonal mince autour du corps
+        d.polygon(hex_pts, fill=None, outline=GOLD["dark"])
+
+    # === [Layer 7] COURONNE dorée (T2) ===
+    if is_t2:
+        # 3 pointes dorées au sommet du corps
+        for dx_ in (-4, 0, 4):
+            d.polygon([(cx + dx_ - 1, cy - 7), (cx + dx_ + 1, cy - 7),
+                       (cx + dx_, cy - 12)], fill=GOLD["light"])
+        # Base de la couronne (anneau doré sur le sommet)
+        d.line((cx - 6, cy - 7, cx + 6, cy - 7), fill=GOLD["dark"], width=1)
+        # Contour hexagonal doré (signature royale)
+        d.polygon(hex_pts, fill=None, outline=GOLD["light"])
+
+    return drop_shadow(img, offset=(1, 2), blur=2, opacity=100)
+
+
+# ===========================================================================
+# 5b. UNIT SNIPER — 56x56, mech bipédique longue portée
+# ===========================================================================
+# Rapatrié depuis preview_swarmer_sniper.py + ajout param tier.
+
+def render_unit_sniper(side: str, tier: int = 0, pal_override: dict = None) -> Image.Image:
+    """Sniper unit. Tiers (player only):
+       0 = canon simple / silhouette de base
+       1 = Emerald + canon allongé + bipied stabilisateur + casque renforcé (Tireur)
+       2 = Royal + double-canon parallèle + cape camouflage + plumes dorées + ceinture munitions (Maître)"""
+    W = H = 56
+    pal = pal_override if pal_override is not None else side_palette(side, tier)
+    is_t1 = tier == 1
+    is_t2 = tier == 2
+    img, d = new_canvas(W, H)
+    cx, cy = W // 2, H // 2
+
+    # === [Layer 0] CAPE de camouflage (T2) — passe derrière le perso ===
+    if is_t2:
+        cape_pts = [
+            (cx - 12, cy - 12), (cx + 12, cy - 12),
+            (cx + 14, cy + 18), (cx - 14, cy + 18),
+        ]
+        d.polygon(cape_pts, fill=pal["dark"], outline=ACCENT["outline"])
+        # Texture camouflage (taches de couleur intermédiaire)
+        for px, py in [(cx - 6, cy - 4), (cx + 4, cy), (cx - 2, cy + 8),
+                       (cx + 8, cy + 12), (cx - 10, cy + 14)]:
+            d.ellipse((px - 3, py - 2, px + 3, py + 2), fill=pal["base"])
+        # Liseré doré au bord
+        d.line((cx - 14, cy + 18, cx + 14, cy + 18), fill=GOLD["light"], width=1)
+
+    # === [Layer 1] JAMBES bipédiques ===
+    leg_top_y = cy + 6
+    leg_bottom_y = cy + 22
+    for dx in (-7, 7):
+        d.rectangle(
+            (cx + dx - 3, leg_top_y, cx + dx + 3, leg_bottom_y),
+            fill=METAL["dark"], outline=ACCENT["outline"],
+        )
+        d.rectangle((cx + dx - 2, leg_top_y + 1, cx + dx - 1, leg_bottom_y - 2),
+                    fill=METAL["light"])
+        d.ellipse(
+            (cx + dx - 5, leg_bottom_y - 2, cx + dx + 5, leg_bottom_y + 4),
+            fill=METAL["darkest"], outline=ACCENT["outline"],
+        )
+
+    # === [Layer 2] BIPIED stabilisateur (T1) — 2 supports diagonaux à la base ===
+    if is_t1:
+        # Bipied gauche
+        d.line((cx - 10, cy + 20, cx - 16, cy + 26), fill=METAL["darkest"], width=2)
+        d.ellipse((cx - 17, cy + 25, cx - 15, cy + 27), fill=METAL["light"])
+        # Bipied droit
+        d.line((cx + 10, cy + 20, cx + 16, cy + 26), fill=METAL["darkest"], width=2)
+        d.ellipse((cx + 15, cy + 25, cx + 17, cy + 27), fill=METAL["light"])
+
+    # === [Layer 3] CEINTURE MUNITIONS (T2) — passe en travers du torse ===
+    if is_t2:
+        # Bande de munitions en diagonale (de l'épaule gauche à la hanche droite)
+        d.line((cx - 10, cy - 8, cx + 10, cy + 6), fill=GOLD["dark"], width=3)
+        # Cartouches visibles
+        for t in (0.2, 0.4, 0.6, 0.8):
+            px = int(cx - 10 + (20 * t))
+            py = int(cy - 8 + (14 * t))
+            d.rectangle((px - 1, py - 1, px + 1, py + 2), fill=GOLD["light"])
+
+    # === [Layer 4] CHÂSSIS vertical ===
+    body = (cx - 10, cy - 16, cx + 10, cy + 8)
+    rounded_rect_with_shading(d, body,
+                              color_base=pal["base"], color_dark=METAL["darkest"],
+                              color_light=pal["light"], radius=3,
+                              outline=ACCENT["outline"])
+
+    # Plaque pectorale
+    d.rectangle((cx - 4, cy - 6, cx + 4, cy + 2), fill=pal["dark"])
+    d.line((cx, cy - 6, cx, cy + 2), fill=ACCENT["outline"])
+
+    # === [Layer 5] CASQUE RENFORCÉ (T1 et T2) — au-dessus du scope ===
+    if is_t1 or is_t2:
+        # Casque qui élargit le sommet du châssis
+        d.rounded_rectangle((cx - 7, cy - 18, cx + 7, cy - 14), radius=2,
+                            fill=pal["dark"], outline=ACCENT["outline"])
+        # Reflet
+        d.line((cx - 6, cy - 17, cx + 6, cy - 17), fill=pal["light"], width=1)
+
+    # === [Layer 6] SCOPE/LUNETTE — taille selon tier ===
+    if is_t2:
+        # Scope premium plus gros + plumes dorées (2 latérales façon emplumage)
+        d.rectangle((cx - 5, cy - 24, cx + 5, cy - 16),
+                    fill=METAL["base"], outline=ACCENT["outline"])
+        d.ellipse((cx - 3, cy - 23, cx + 3, cy - 18), fill=GOLD["light"])
+        d.ellipse((cx - 1, cy - 22, cx + 1, cy - 20), fill=ACCENT["white"])
+        # 2 plumes dorées sur le casque (style chef de guerre)
+        d.polygon([(cx - 7, cy - 18), (cx - 14, cy - 24), (cx - 5, cy - 20)],
+                  fill=GOLD["light"], outline=ACCENT["outline"])
+        d.polygon([(cx + 7, cy - 18), (cx + 14, cy - 24), (cx + 5, cy - 20)],
+                  fill=GOLD["light"], outline=ACCENT["outline"])
+        # Reflets sur plumes
+        d.line((cx - 7, cy - 19, cx - 13, cy - 23), fill=GOLD["highlight"], width=1)
+        d.line((cx + 7, cy - 19, cx + 13, cy - 23), fill=GOLD["highlight"], width=1)
+    else:
+        # Scope classique
+        d.rectangle((cx - 4, cy - 22, cx + 4, cy - 16),
+                    fill=METAL["base"], outline=ACCENT["outline"])
+        d.ellipse((cx - 2, cy - 21, cx + 2, cy - 17),
+                  fill=pal["glow"] if is_t1 else ACCENT["warning"])
+        d.ellipse((cx - 1, cy - 20, cx, cy - 19), fill=ACCENT["white"])
+
+    # === [Layer 7] CANON(S) — simple/allongé/double selon tier ===
+    if is_t2:
+        # DOUBLE-CANON parallèle (signature Maître Tireur)
+        # Canon supérieur
+        d.rectangle((cx + 10, cy - 5, cx + 26, cy - 1),
+                    fill=METAL["darkest"], outline=ACCENT["outline"])
+        d.line((cx + 11, cy - 4, cx + 25, cy - 4), fill=GOLD["dark"], width=1)
+        d.rectangle((cx + 24, cy - 5, cx + 26, cy - 1), fill=GOLD["light"])
+        # Canon inférieur
+        d.rectangle((cx + 10, cy + 1, cx + 26, cy + 5),
+                    fill=METAL["darkest"], outline=ACCENT["outline"])
+        d.line((cx + 11, cy + 2, cx + 25, cy + 2), fill=GOLD["dark"], width=1)
+        d.rectangle((cx + 24, cy + 1, cx + 26, cy + 5), fill=GOLD["light"])
+        # Boîtier qui réunit les 2 canons
+        d.rectangle((cx + 8, cy - 6, cx + 12, cy + 6),
+                    fill=METAL["dark"], outline=ACCENT["outline"])
+    elif is_t1:
+        # Canon allongé (28 au lieu de 26 = +2px)
+        d.rectangle((cx + 10, cy - 3, cx + 28, cy + 1),
+                    fill=METAL["darkest"], outline=ACCENT["outline"])
+        # Liseré doré T1 sur le dessus du canon
+        d.line((cx + 11, cy - 2, cx + 27, cy - 2), fill=GOLD["dark"], width=1)
+        # Bouche du canon dorée T1 (subtil)
+        d.rectangle((cx + 26, cy - 3, cx + 28, cy + 1), fill=GOLD["light"])
+        # Stabilisateur
+        d.rectangle((cx + 8, cy - 5, cx + 12, cy + 3),
+                    fill=METAL["dark"], outline=ACCENT["outline"])
+        # Petit insigne doré sur la plaque pectorale (grade)
+        d.rectangle((cx - 1, cy - 4, cx + 1, cy - 2), fill=GOLD["light"])
+    else:
+        # Canon simple (défaut)
+        d.rectangle((cx + 10, cy - 3, cx + 26, cy + 1),
+                    fill=METAL["darkest"], outline=ACCENT["outline"])
+        d.line((cx + 11, cy - 2, cx + 25, cy - 2), fill=METAL["light"], width=1)
+        d.rectangle((cx + 24, cy - 3, cx + 26, cy + 1), fill=ACCENT["warning"])
+        d.rectangle((cx + 8, cy - 5, cx + 12, cy + 3),
+                    fill=METAL["dark"], outline=ACCENT["outline"])
+
+    return drop_shadow(img, offset=(2, 2), blur=2, opacity=120)
+
+
+# ===========================================================================
+# 5c. FACTORY AIR — 128x128, hangar industriel à toit ouvert
 # ===========================================================================
 # Signature : toit en V ouvert au centre, révélant une rampe de lancement et
 # un mini drone delta posé dessus. Orientation explicite par côté :
@@ -416,15 +854,19 @@ def render_factory_air(side: str) -> Image.Image:
 # Orientation : pointe vers la DROITE (+X). Le code de game.js flippe
 # horizontalement pour les enemy. On dessine donc toujours côté player.
 
-def render_unit_air(side: str) -> Image.Image:
+def render_unit_air(side: str, tier: int = 0, pal_override: dict = None) -> Image.Image:
+    """Air unit. Tiers (player only):
+       0 = chasseur delta simple / silhouette de base
+       1 = Emerald + ailes élargies + 4 missiles + réacteurs renforcés (Intercepteur)
+       2 = Royal + ailes en X (canards avant) + 6 missiles + post-combustion + canopée bulle dorée"""
     W = H = 48
-    pal = side_palette(side)
+    pal = pal_override if pal_override is not None else side_palette(side, tier)
+    is_t1 = tier == 1
+    is_t2 = tier == 2
     img, d = new_canvas(W, H)
-
     cx, cy = W // 2, H // 2
 
-    # === Ombre projetée au sol (décalée en bas-droite, plate, floue) ===
-    # Donne l'illusion que le chasseur survole le sol.
+    # === [Layer 0] OMBRE projetée ===
     shadow_layer = Image.new("RGBA", (W, H), TRANSPARENT)
     sd_shadow = ImageDraw.Draw(shadow_layer, "RGBA")
     sd_shadow.polygon(
@@ -435,52 +877,164 @@ def render_unit_air(side: str) -> Image.Image:
     img = Image.alpha_composite(img, shadow_layer)
     d = ImageDraw.Draw(img, "RGBA")
 
-    # === Aile delta (triangle large, pointe vers la droite, swept-back) ===
-    wing = [
-        (cx + 20, cy),           # pointe avant
-        (cx - 16, cy - 14),      # arrière-gauche-haut
-        (cx - 8, cy),            # creux arrière central
-        (cx - 16, cy + 14),      # arrière-gauche-bas
-    ]
+    # === [Layer 1] POST-COMBUSTION (T2) — flammes longues derrière les réacteurs ===
+    if is_t2:
+        flame_layer = Image.new("RGBA", (W, H), TRANSPARENT)
+        fd = ImageDraw.Draw(flame_layer, "RGBA")
+        # Flamme supérieure (du réacteur sup vers la gauche)
+        fd.polygon([(cx - 17, cy - 6), (cx - 17, cy - 2),
+                    (cx - 24, cy - 4)],
+                   fill=(GOLD["light"][0], GOLD["light"][1], GOLD["light"][2], 200))
+        fd.polygon([(cx - 17, cy - 5), (cx - 17, cy - 3),
+                    (cx - 22, cy - 4)],
+                   fill=(255, 255, 255, 220))
+        # Flamme inférieure
+        fd.polygon([(cx - 17, cy + 2), (cx - 17, cy + 6),
+                    (cx - 24, cy + 4)],
+                   fill=(GOLD["light"][0], GOLD["light"][1], GOLD["light"][2], 200))
+        fd.polygon([(cx - 17, cy + 3), (cx - 17, cy + 5),
+                    (cx - 22, cy + 4)],
+                   fill=(255, 255, 255, 220))
+        flame_layer = flame_layer.filter(ImageFilter.GaussianBlur(1))
+        img = Image.alpha_composite(img, flame_layer)
+        d = ImageDraw.Draw(img, "RGBA")
+
+    # === [Layer 2] AILE PRINCIPALE — taille selon tier ===
+    if is_t1 or is_t2:
+        # Aile élargie (envergure plus grande, +4px sur les bords)
+        wing = [
+            (cx + 22, cy),               # pointe avant (+2px)
+            (cx - 18, cy - 18),          # arrière-gauche-haut élargi
+            (cx - 8, cy),                # creux central
+            (cx - 18, cy + 18),          # arrière-gauche-bas élargi
+        ]
+    else:
+        # Aile delta standard
+        wing = [
+            (cx + 20, cy),
+            (cx - 16, cy - 14),
+            (cx - 8, cy),
+            (cx - 16, cy + 14),
+        ]
     d.polygon(wing, fill=pal["base"], outline=ACCENT["outline"])
+    d.line((wing[0][0], wing[0][1], wing[1][0], wing[1][1]),
+           fill=pal["light"], width=1)
 
-    # === Highlight sur le bord d'attaque supérieur (suggère l'éclairage) ===
-    d.line((cx + 20, cy, cx - 16, cy - 14), fill=pal["light"], width=1)
+    # === [Layer 3] CANARDS AVANT (T2) — petites ailettes triangulaires sur le nez ===
+    if is_t2:
+        # Canard supérieur (sur le nez avant)
+        d.polygon([(cx + 12, cy - 1), (cx + 18, cy - 8), (cx + 18, cy - 5)],
+                  fill=pal["dark"], outline=ACCENT["outline"])
+        # Canard inférieur
+        d.polygon([(cx + 12, cy + 1), (cx + 18, cy + 8), (cx + 18, cy + 5)],
+                  fill=pal["dark"], outline=ACCENT["outline"])
+        # Liseré doré sur les canards
+        d.line((cx + 12, cy - 1, cx + 18, cy - 8), fill=GOLD["light"], width=1)
+        d.line((cx + 12, cy + 1, cx + 18, cy + 8), fill=GOLD["light"], width=1)
 
-    # === Fuselage central (rectangle effilé sur l'axe) ===
+    # === [Layer 4] FUSELAGE central ===
     d.polygon(
         [(cx + 18, cy - 1), (cx + 18, cy + 1),
          (cx - 12, cy + 4), (cx - 12, cy - 4)],
         fill=pal["dark"], outline=ACCENT["outline"],
     )
 
-    # === Cockpit / canopée (ovale glow vers l'avant du fuselage) ===
-    d.ellipse((cx + 4, cy - 3, cx + 14, cy + 3),
-              fill=pal["glow"], outline=ACCENT["outline"])
-    # Reflet sur la canopée
-    d.ellipse((cx + 6, cy - 2, cx + 9, cy), fill=ACCENT["white"])
+    # === [Layer 5] COCKPIT — bulle dorée pour T2, ovale glow sinon ===
+    if is_t2:
+        # Canopée bulle plus grosse (dôme premium)
+        d.ellipse((cx + 2, cy - 4, cx + 14, cy + 4),
+                  fill=pal["glow"], outline=ACCENT["outline"])
+        d.ellipse((cx + 2, cy - 4, cx + 14, cy + 4),
+                  fill=None, outline=GOLD["light"], width=1)
+        # Reflet blanc
+        d.ellipse((cx + 5, cy - 3, cx + 9, cy), fill=ACCENT["white"])
+    else:
+        d.ellipse((cx + 4, cy - 3, cx + 14, cy + 3),
+                  fill=pal["glow"], outline=ACCENT["outline"])
+        d.ellipse((cx + 6, cy - 2, cx + 9, cy), fill=ACCENT["white"])
 
-    # === Missiles sous les ailes (2 rectangles fins métal) ===
-    d.rectangle((cx - 4, cy - 10, cx + 8, cy - 8),
-                fill=METAL["darkest"], outline=ACCENT["outline"])
-    d.rectangle((cx + 6, cy - 10, cx + 8, cy - 8), fill=ACCENT["warning"])
-    d.rectangle((cx - 4, cy + 8, cx + 8, cy + 10),
-                fill=METAL["darkest"], outline=ACCENT["outline"])
-    d.rectangle((cx + 6, cy + 8, cx + 8, cy + 10), fill=ACCENT["warning"])
+    # === [Layer 6] MISSILES — 2 / 4 / 6 selon tier ===
+    if is_t2:
+        # 6 missiles : 3 par aile (paire interne, médiane, externe)
+        for dy_pair in (-10, 10):  # haut et bas
+            # Missile externe (le plus loin du fuselage)
+            d.rectangle((cx - 6, cy + dy_pair - 1, cx + 6, cy + dy_pair + 1),
+                        fill=METAL["darkest"], outline=ACCENT["outline"])
+            d.rectangle((cx + 4, cy + dy_pair - 1, cx + 6, cy + dy_pair + 1),
+                        fill=GOLD["light"])
+            # Missile médian
+            d.rectangle((cx - 4, cy + (dy_pair * 4 // 5) - 1,
+                         cx + 8, cy + (dy_pair * 4 // 5) + 1),
+                        fill=METAL["darkest"], outline=ACCENT["outline"])
+            d.rectangle((cx + 6, cy + (dy_pair * 4 // 5) - 1,
+                         cx + 8, cy + (dy_pair * 4 // 5) + 1),
+                        fill=GOLD["light"])
+            # Missile interne (proche du fuselage)
+            d.rectangle((cx - 2, cy + (dy_pair * 3 // 5) - 1,
+                         cx + 10, cy + (dy_pair * 3 // 5) + 1),
+                        fill=METAL["darkest"], outline=ACCENT["outline"])
+            d.rectangle((cx + 8, cy + (dy_pair * 3 // 5) - 1,
+                         cx + 10, cy + (dy_pair * 3 // 5) + 1),
+                        fill=GOLD["light"])
+    elif is_t1:
+        # 4 missiles : 2 par aile (paire interne + paire externe)
+        # Pointes dorées (subtil grade T1)
+        for dy_pair in (-10, 10):
+            # Missile externe
+            d.rectangle((cx - 4, cy + dy_pair, cx + 8, cy + dy_pair + 2),
+                        fill=METAL["darkest"], outline=ACCENT["outline"])
+            d.rectangle((cx + 6, cy + dy_pair, cx + 8, cy + dy_pair + 2),
+                        fill=GOLD["light"])
+            # Missile interne
+            d.rectangle((cx - 2, cy + (dy_pair * 3 // 5),
+                         cx + 10, cy + (dy_pair * 3 // 5) + 2),
+                        fill=METAL["darkest"], outline=ACCENT["outline"])
+            d.rectangle((cx + 8, cy + (dy_pair * 3 // 5),
+                         cx + 10, cy + (dy_pair * 3 // 5) + 2),
+                        fill=GOLD["light"])
+    else:
+        # 2 missiles (défaut)
+        d.rectangle((cx - 4, cy - 10, cx + 8, cy - 8),
+                    fill=METAL["darkest"], outline=ACCENT["outline"])
+        d.rectangle((cx + 6, cy - 10, cx + 8, cy - 8), fill=ACCENT["warning"])
+        d.rectangle((cx - 4, cy + 8, cx + 8, cy + 10),
+                    fill=METAL["darkest"], outline=ACCENT["outline"])
+        d.rectangle((cx + 6, cy + 8, cx + 8, cy + 10), fill=ACCENT["warning"])
 
-    # === Réacteurs arrière (2 cylindres + flamme glow) ===
-    # Réacteur supérieur
-    d.rectangle((cx - 16, cy - 6, cx - 10, cy - 2),
-                fill=METAL["dark"], outline=ACCENT["outline"])
-    d.rectangle((cx - 17, cy - 5, cx - 16, cy - 3), fill=pal["glow"])
-    # Réacteur inférieur
-    d.rectangle((cx - 16, cy + 2, cx - 10, cy + 6),
-                fill=METAL["dark"], outline=ACCENT["outline"])
-    d.rectangle((cx - 17, cy + 3, cx - 16, cy + 5), fill=pal["glow"])
+    # === [Layer 7] RÉACTEURS — renforcés pour T1/T2 ===
+    if is_t1 or is_t2:
+        # Réacteurs plus gros (élargis de 2px)
+        d.rectangle((cx - 18, cy - 7, cx - 10, cy - 1),
+                    fill=METAL["dark"], outline=ACCENT["outline"])
+        d.rectangle((cx - 18, cy + 1, cx - 10, cy + 7),
+                    fill=METAL["dark"], outline=ACCENT["outline"])
+        # Glow à la sortie
+        glow_color = GOLD["light"] if is_t2 else pal["glow"]
+        d.rectangle((cx - 19, cy - 6, cx - 17, cy - 2), fill=glow_color)
+        d.rectangle((cx - 19, cy + 2, cx - 17, cy + 6), fill=glow_color)
+    else:
+        # Réacteurs standard
+        d.rectangle((cx - 16, cy - 6, cx - 10, cy - 2),
+                    fill=METAL["dark"], outline=ACCENT["outline"])
+        d.rectangle((cx - 17, cy - 5, cx - 16, cy - 3), fill=pal["glow"])
+        d.rectangle((cx - 16, cy + 2, cx - 10, cy + 6),
+                    fill=METAL["dark"], outline=ACCENT["outline"])
+        d.rectangle((cx - 17, cy + 3, cx - 16, cy + 5), fill=pal["glow"])
 
-    # === Empennage stabilisateur arrière (petit triangle vertical au centre) ===
+    # === [Layer 8] EMPENNAGE stabilisateur ===
     d.polygon([(cx - 10, cy - 1), (cx - 10, cy + 1), (cx - 14, cy)],
               fill=METAL["light"])
+
+    # === [Layer 9] LISERÉ DORÉ sur les ailes (T1 subtil, T2 double) ===
+    if is_t2:
+        d.line((wing[0][0], wing[0][1], wing[1][0], wing[1][1]),
+               fill=GOLD["light"], width=1)
+        d.line((wing[0][0], wing[0][1], wing[3][0], wing[3][1]),
+               fill=GOLD["dark"], width=1)
+    elif is_t1:
+        # Liseré doré subtil sur le bord d'attaque supérieur seulement
+        d.line((wing[0][0], wing[0][1], wing[1][0], wing[1][1]),
+               fill=GOLD["dark"], width=1)
 
     return drop_shadow(img, offset=(1, 2), blur=2, opacity=90)
 
@@ -622,6 +1176,28 @@ SPRITES = [
     ("factory-air-enemy.png",    render_factory_air,    ("enemy",)),
     ("unit-air-player.png",      render_unit_air,       ("player",)),
     ("unit-air-enemy.png",       render_unit_air,       ("enemy",)),
+    # === Boutique : skins player tier 1 (Steel/Rare) et tier 2 (Royal Blue/Epic) ===
+    ("unit-light-player-t1.png",   render_unit_light,   ("player", 1)),
+    ("unit-light-player-t2.png",   render_unit_light,   ("player", 2)),
+    ("unit-heavy-player-t1.png",   render_unit_heavy,   ("player", 1)),
+    ("unit-heavy-player-t2.png",   render_unit_heavy,   ("player", 2)),
+    ("unit-swarmer-player-t1.png", render_unit_swarmer, ("player", 1)),
+    ("unit-swarmer-player-t2.png", render_unit_swarmer, ("player", 2)),
+    ("unit-sniper-player-t1.png",  render_unit_sniper,  ("player", 1)),
+    ("unit-sniper-player-t2.png",  render_unit_sniper,  ("player", 2)),
+    ("unit-air-player-t1.png",     render_unit_air,     ("player", 1)),
+    ("unit-air-player-t2.png",     render_unit_air,     ("player", 2)),
+    # === Skins enemy tier 1 (rouge chromé) et tier 2 (bordeaux profond) — désert ===
+    ("unit-light-enemy-t1.png",    render_unit_light,   ("enemy", 1)),
+    ("unit-light-enemy-t2.png",    render_unit_light,   ("enemy", 2)),
+    ("unit-heavy-enemy-t1.png",    render_unit_heavy,   ("enemy", 1)),
+    ("unit-heavy-enemy-t2.png",    render_unit_heavy,   ("enemy", 2)),
+    ("unit-swarmer-enemy-t1.png",  render_unit_swarmer, ("enemy", 1)),
+    ("unit-swarmer-enemy-t2.png",  render_unit_swarmer, ("enemy", 2)),
+    ("unit-sniper-enemy-t1.png",   render_unit_sniper,  ("enemy", 1)),
+    ("unit-sniper-enemy-t2.png",   render_unit_sniper,  ("enemy", 2)),
+    ("unit-air-enemy-t1.png",      render_unit_air,     ("enemy", 1)),
+    ("unit-air-enemy-t2.png",      render_unit_air,     ("enemy", 2)),
     ("tile-wall.png",            render_tile_wall,      ()),
     ("effect-explosion.png",     render_effect_explosion, ()),
     ("effect-laser.png",         render_effect_laser,   ()),

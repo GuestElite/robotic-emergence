@@ -19,6 +19,38 @@ PLAYER = {
     "glow":    (125, 211, 252, 255),  # #7DD3FC
 }
 
+# Player skin tier 1 ⭐ "Steel" (Rare) — bleu acier chromé + 1-2 bandes dorées
+# Famille bleue (le joueur reste identifiable), monte en grade par chrome + doré.
+PLAYER_T1 = {
+    "dark":  ( 30,  58,  95, 255),   # #1E3A5F bleu acier foncé
+    "base":  ( 74, 123, 168, 255),   # #4A7BA8 bleu chromé medium
+    "light": (164, 188, 216, 255),   # #A4BCD8 argenté bleuté
+    "glow":  (147, 197, 253, 255),   # #93C5FD cyan clair (yeux/voyants)
+}
+
+# Player skin tier 2 ⭐⭐ "Royal Blue" (Epic) — bleu marine profond + glow doré + accents premium
+# Plus le tier monte, plus le bleu fonce et plus les dorures sont visibles.
+PLAYER_T2 = {
+    "dark":  ( 13,  29,  58, 255),   # #0D1D3A bleu marine quasi noir
+    "base":  ( 30,  58, 138, 255),   # #1E3A8A bleu marine profond
+    "light": ( 59,  91, 170, 255),   # #3B5BAA bleu intermédiaire (reflet)
+    "glow":  (251, 191,  36, 255),   # #FBBF24 doré (yeux/voyants premium)
+}
+
+# Doré pur (utilisé pour les accents additifs du tier 2 : liseré, ornements)
+GOLD = {
+    "dark":    (146, 100,  18, 255), # #926412 or sombre
+    "base":    (217, 161,  35, 255), # #D9A123 or moyen
+    "light":   (251, 191,  36, 255), # #FBBF24 or vif
+    "highlight":(254, 240, 138, 255),# #FEF08A or pâle (reflet)
+}
+
+
+def player_palette(tier: int = 0) -> dict:
+    """Renvoie la palette joueur pour le tier donné (0 = défaut, 1 = Emerald, 2 = Royal)."""
+    return {0: PLAYER, 1: PLAYER_T1, 2: PLAYER_T2}[tier]
+
+
 # Ennemi (droite) — rouge/orange
 ENEMY = {
     "dark":    (153,  27,  27, 255),  # #991B1B
@@ -26,6 +58,27 @@ ENEMY = {
     "light":   (249, 115,  22, 255),  # #F97316
     "glow":    (253, 186, 116, 255),  # #FDBA74
 }
+
+# Enemy skin tier 1 — rouge acier chromé + accents dorés subtils (Rare)
+ENEMY_T1 = {
+    "dark":  (108,  29,  29, 255),   # #6C1D1D rouge bordeaux foncé
+    "base":  (180,  74,  62, 255),   # #B44A3E rouge brique chromé
+    "light": (224, 156, 134, 255),   # #E09C86 rouge clair patiné
+    "glow":  (253, 186, 116, 255),   # #FDBA74 orange (yeux/voyants)
+}
+
+# Enemy skin tier 2 — rouge bordeaux profond + glow doré + accents premium (Epic)
+ENEMY_T2 = {
+    "dark":  ( 60,  10,  10, 255),   # #3C0A0A bordeaux quasi-noir
+    "base":  (110,  25,  25, 255),   # #6E1919 bordeaux profond
+    "light": (170,  55,  55, 255),   # #AA3737 rouge bordeaux intermédiaire
+    "glow":  (251, 191,  36, 255),   # #FBBF24 doré (yeux/voyants premium)
+}
+
+
+def enemy_palette(tier: int = 0) -> dict:
+    """Renvoie la palette enemy pour le tier donné (0 = défaut, 1 = chrome, 2 = bordeaux)."""
+    return {0: ENEMY, 1: ENEMY_T1, 2: ENEMY_T2}[tier]
 
 # Métal / structure (commun)
 METAL = {
@@ -55,9 +108,12 @@ ACCENT = {
 TRANSPARENT = (0, 0, 0, 0)
 
 
-def side_palette(side: str) -> dict:
-    """Renvoie la palette du camp (player|enemy)."""
-    return PLAYER if side == "player" else ENEMY
+def side_palette(side: str, tier: int = 0) -> dict:
+    """Renvoie la palette du camp (player|enemy).
+    Tier ∈ {0, 1, 2} sélectionne la skin (Common/Rare/Epic) — appliqué aux 2 camps."""
+    if side == "player":
+        return player_palette(tier)
+    return enemy_palette(tier)
 
 
 # ---------------------------------------------------------------------------

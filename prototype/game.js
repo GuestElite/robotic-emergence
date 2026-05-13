@@ -713,6 +713,19 @@ const SPRITE_FILES = [
   "unit-sniper-enemy",
   "unit-air-player",
   "unit-air-enemy",
+  // === Skins boutique : tier 1 (Rare) + tier 2 (Epic), player + enemy ===
+  // Player skins (mêmes sprites tous biomes — le player garde sa famille bleue)
+  "unit-light-player-t1", "unit-light-player-t2",
+  "unit-heavy-player-t1", "unit-heavy-player-t2",
+  "unit-swarmer-player-t1", "unit-swarmer-player-t2",
+  "unit-sniper-player-t1", "unit-sniper-player-t2",
+  "unit-air-player-t1", "unit-air-player-t2",
+  // Enemy skins (biome-specific : rouge desert / vert jungle / gunmetal snow)
+  "unit-light-enemy-t1", "unit-light-enemy-t2",
+  "unit-heavy-enemy-t1", "unit-heavy-enemy-t2",
+  "unit-swarmer-enemy-t1", "unit-swarmer-enemy-t2",
+  "unit-sniper-enemy-t1", "unit-sniper-enemy-t2",
+  "unit-air-enemy-t1", "unit-air-enemy-t2",
   "effect-explosion",
   // Props désert
   "prop-rock-big",
@@ -899,6 +912,12 @@ const BIOME_SPECIFIC_SPRITES = new Set([
   "unit-swarmer-enemy", "unit-sniper-enemy", "unit-air-enemy",
   "factory-light-enemy", "factory-heavy-enemy",
   "factory-swarmer-enemy", "factory-sniper-enemy", "factory-air-enemy",
+  // Skins enemy tier 1/2 — changent aussi par biome
+  "unit-light-enemy-t1", "unit-light-enemy-t2",
+  "unit-heavy-enemy-t1", "unit-heavy-enemy-t2",
+  "unit-swarmer-enemy-t1", "unit-swarmer-enemy-t2",
+  "unit-sniper-enemy-t1", "unit-sniper-enemy-t2",
+  "unit-air-enemy-t1", "unit-air-enemy-t2",
 ]);
 
 // Couleur du gradient peint sur le sol par biome (rgba semi-transparent).

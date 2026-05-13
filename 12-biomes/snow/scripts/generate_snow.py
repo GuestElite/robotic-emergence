@@ -23,6 +23,11 @@ ART_SCRIPTS = REPO_ROOT / "08-art-direction" / "scripts"
 sys.path.insert(0, str(ART_SCRIPTS))
 
 from palette import new_canvas, drop_shadow, vertical_gradient, METAL, ACCENT
+# Import des render_unit_* partagés (utilisés pour les tiers T1/T2 snow)
+from generate_sprites import (
+    render_unit_light, render_unit_heavy,
+    render_unit_swarmer, render_unit_sniper, render_unit_air,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +40,22 @@ ENEMY_SNOW = {
     "base":  (45,  63,  82,  255),   # #2D3F52 gunmetal bleu
     "light": (74,  97,  120, 255),   # #4A6178 acier bleuté
     "glow":  (91,  225, 255, 255),   # #5BE1FF cyan glacé
+}
+
+# Enemy snow tier 1 — gunmetal chromé + accents dorés subtils (Rare)
+ENEMY_SNOW_T1 = {
+    "dark":  ( 45,  63,  82, 255),   # gunmetal medium
+    "base":  ( 90, 115, 140, 255),   # gunmetal chromé clair
+    "light": (170, 192, 215, 255),   # acier brillant
+    "glow":  ( 91, 225, 255, 255),   # cyan glacé (conservé)
+}
+
+# Enemy snow tier 2 — gunmetal très foncé + glow doré (Epic)
+ENEMY_SNOW_T2 = {
+    "dark":  ( 10,  18,  28, 255),   # noir profond bleuté
+    "base":  ( 22,  35,  50, 255),   # gunmetal très sombre
+    "light": ( 60,  85, 110, 255),   # acier intermédiaire
+    "glow":  (251, 191,  36, 255),   # doré (yeux/voyants premium)
 }
 
 # Sol neige
@@ -822,6 +843,18 @@ def main():
         ("factory-swarmer-enemy.png",  render_factory_swarmer_snow),
         ("factory-sniper-enemy.png",   render_factory_sniper_snow),
         ("factory-air-enemy.png",      render_factory_air_snow),
+        # === Tier 1 snow (gunmetal chromé + accents dorés subtils) ===
+        ("unit-light-enemy-t1.png",    lambda: render_unit_light("enemy", 1, ENEMY_SNOW_T1)),
+        ("unit-heavy-enemy-t1.png",    lambda: render_unit_heavy("enemy", 1, ENEMY_SNOW_T1)),
+        ("unit-swarmer-enemy-t1.png",  lambda: render_unit_swarmer("enemy", 1, ENEMY_SNOW_T1)),
+        ("unit-sniper-enemy-t1.png",   lambda: render_unit_sniper("enemy", 1, ENEMY_SNOW_T1)),
+        ("unit-air-enemy-t1.png",      lambda: render_unit_air("enemy", 1, ENEMY_SNOW_T1)),
+        # === Tier 2 snow (gunmetal très foncé + glow doré + accessoires premium) ===
+        ("unit-light-enemy-t2.png",    lambda: render_unit_light("enemy", 2, ENEMY_SNOW_T2)),
+        ("unit-heavy-enemy-t2.png",    lambda: render_unit_heavy("enemy", 2, ENEMY_SNOW_T2)),
+        ("unit-swarmer-enemy-t2.png",  lambda: render_unit_swarmer("enemy", 2, ENEMY_SNOW_T2)),
+        ("unit-sniper-enemy-t2.png",   lambda: render_unit_sniper("enemy", 2, ENEMY_SNOW_T2)),
+        ("unit-air-enemy-t2.png",      lambda: render_unit_air("enemy", 2, ENEMY_SNOW_T2)),
     ]
 
     for name, fn in to_render:

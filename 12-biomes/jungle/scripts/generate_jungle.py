@@ -23,6 +23,11 @@ ART_SCRIPTS = REPO_ROOT / "08-art-direction" / "scripts"
 sys.path.insert(0, str(ART_SCRIPTS))
 
 from palette import new_canvas, drop_shadow, vertical_gradient, METAL, ACCENT
+# Import des render_unit_* partagés (utilisés pour les tiers T1/T2 jungle)
+from generate_sprites import (
+    render_unit_light, render_unit_heavy,
+    render_unit_swarmer, render_unit_sniper, render_unit_air,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +40,22 @@ ENEMY_JUNGLE = {
     "base":  (79,  123, 58, 255),   # #4F7B3A vert militaire
     "light": (124, 179, 66, 255),   # #7CB342 vert feuille
     "glow":  (164, 255, 56, 255),   # #A4FF38 vert acide
+}
+
+# Enemy jungle tier 1 — vert chromé + accents dorés subtils (Rare)
+ENEMY_JUNGLE_T1 = {
+    "dark":  ( 45,  92,  45, 255),   # vert chromé foncé
+    "base":  ( 95, 145,  78, 255),   # vert chromé medium
+    "light": (167, 213, 138, 255),   # vert pâle chromé
+    "glow":  (164, 255,  56, 255),   # vert acide (yeux/voyants conservés)
+}
+
+# Enemy jungle tier 2 — vert profond presque noir + glow doré (Epic)
+ENEMY_JUNGLE_T2 = {
+    "dark":  ( 16,  40,  18, 255),   # vert quasi-noir
+    "base":  ( 40,  80,  35, 255),   # vert très foncé
+    "light": ( 75, 120,  55, 255),   # vert intermédiaire
+    "glow":  (251, 191,  36, 255),   # doré (yeux/voyants premium)
 }
 
 # Sol jungle — terre brune humide
@@ -861,6 +882,18 @@ def main():
         ("factory-swarmer-enemy.png",  render_factory_swarmer_jungle),
         ("factory-sniper-enemy.png",   render_factory_sniper_jungle),
         ("factory-air-enemy.png",      render_factory_air_jungle),
+        # === Tier 1 jungle (vert chromé + accents dorés subtils) ===
+        ("unit-light-enemy-t1.png",    lambda: render_unit_light("enemy", 1, ENEMY_JUNGLE_T1)),
+        ("unit-heavy-enemy-t1.png",    lambda: render_unit_heavy("enemy", 1, ENEMY_JUNGLE_T1)),
+        ("unit-swarmer-enemy-t1.png",  lambda: render_unit_swarmer("enemy", 1, ENEMY_JUNGLE_T1)),
+        ("unit-sniper-enemy-t1.png",   lambda: render_unit_sniper("enemy", 1, ENEMY_JUNGLE_T1)),
+        ("unit-air-enemy-t1.png",      lambda: render_unit_air("enemy", 1, ENEMY_JUNGLE_T1)),
+        # === Tier 2 jungle (vert profond + glow doré + accessoires premium) ===
+        ("unit-light-enemy-t2.png",    lambda: render_unit_light("enemy", 2, ENEMY_JUNGLE_T2)),
+        ("unit-heavy-enemy-t2.png",    lambda: render_unit_heavy("enemy", 2, ENEMY_JUNGLE_T2)),
+        ("unit-swarmer-enemy-t2.png",  lambda: render_unit_swarmer("enemy", 2, ENEMY_JUNGLE_T2)),
+        ("unit-sniper-enemy-t2.png",   lambda: render_unit_sniper("enemy", 2, ENEMY_JUNGLE_T2)),
+        ("unit-air-enemy-t2.png",      lambda: render_unit_air("enemy", 2, ENEMY_JUNGLE_T2)),
     ]
 
     for name, fn in to_render:
