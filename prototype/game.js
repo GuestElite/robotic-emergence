@@ -2877,12 +2877,16 @@ function drawHUD(ctx) {
 
   // Indicateur de mode build actif (instruction)
   if (game.ui.selectedBuildType) {
-    const t = FACTORY_TYPES[game.ui.selectedBuildType];
+    const sel = game.ui.selectedBuildType;
+    const t = FACTORY_TYPES[sel];
+    const isTurret = sel === "turret";
+    const label = isTurret ? "turret" : (t ? t.label.toLowerCase() : sel);
+    const where = isTurret ? "sur le rempart" : "vide";
     ctx.fillStyle = COLORS.player;
     ctx.font = "11px -apple-system, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(
-      `→ Clique un emplacement vide pour poser une factory ${t.label.toLowerCase()} (Échap pour annuler)`,
+      `→ Clique un emplacement ${where} pour poser une ${label} (Échap pour annuler)`,
       150,
       CONFIG.HUD_H - 8
     );
@@ -3003,6 +3007,7 @@ function canvasCoordsFromEvent(canvas, evt) {
 
 function findSlotAt(side, x, y) {
   const state = game[side];
+  if (!state || !state.slots) return -1;
   for (let i = 0; i < state.slots.length; i++) {
     const s = state.slots[i];
     if (x >= s.x && x <= s.x + s.size && y >= s.y && y <= s.y + s.size) {
@@ -3193,8 +3198,9 @@ function setupInput(canvas) {
     const playerSlotIdx = findSlotAt("player", wx, wy);
     if (playerSlotIdx >= 0) {
       const slot = game.player.slots[playerSlotIdx];
-      // 2a) Mode build actif + slot constructible vide → placement
-      if (game.ui.selectedBuildType && !slot.factory && !slot.isPath) {
+      // 2a) Mode build factory actif (turret est posé sur le rempart, géré plus haut)
+      if (game.ui.selectedBuildType && FACTORY_TYPES[game.ui.selectedBuildType]
+          && !slot.factory && !slot.isPath) {
         const placed = tryPlaceFactory("player", playerSlotIdx, game.ui.selectedBuildType);
         if (placed) {
           const type = FACTORY_TYPES[game.ui.selectedBuildType];
