@@ -528,7 +528,9 @@ const game = {
   enemy: null,
   units: [],
   props: [],                       // décors fixes posés sur la map (rocher, cactus, etc.)
-  attackFx: [],
+  projectiles: [],                 // bolts en vol (remplace attackFx)
+  flashes: [],                     // muzzle + impact flashes
+  attackFx: [],                    // legacy, conservé pour compat — vidé en pratique
   explosions: [],
   lightning: null,                // { x, y1, y2, age, ttl } pendant l'animation
   lightningCooldown: 0,           // secondes restantes avant la prochaine charge
@@ -1400,10 +1402,9 @@ function updateUnits(dt) {
         if (u.attackCooldown === 0) {
           applyDamage(u.target, u.stats.damage, u);
           u.attackCooldown = u.stats.attackInterval;
-          game.attackFx.push({
-            x1: u.x, y1: u.y, x2: u.target.x, y2: u.target.y,
-            age: 0, ttl: 0.12, side: u.side,
-          });
+          // Bolt visuel qui voyage du tireur à la cible (style Star Wars blaster
+          // par type d'unité — light/heavy/swarmer/sniper/air ont chacun leur profil)
+          spawnProjectile(u.x, u.y, u.target.x, u.target.y, u.typeId, u.side);
           audio.playSFX(`shoot-${u.typeId}`);
         }
         continue;
@@ -1703,6 +1704,8 @@ function update(dt) {
   updateUnits(dt);
   resolvePropCollisions();
   updateAttackFx(dt);
+  updateProjectiles(dt);
+  updateFlashes(dt);
   updateExplosions(dt);
   checkGameOver();
   game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
@@ -1848,6 +1851,8 @@ function render(ctx) {
   drawWallSlots(ctx, "enemy");
   drawUnits(ctx);
   drawAttackFx(ctx);
+  drawProjectiles(ctx);
+  drawFlashes(ctx);
   drawExplosions(ctx);
   drawLightning(ctx);
   drawLightningAim(ctx);
@@ -2629,6 +2634,8 @@ function drawUnitPlaceholder(ctx, u, radius) {
   }
 }
 
+// Legacy — vide en pratique. Conservé au cas où du vieux code spawne encore
+// dans attackFx, mais le système actif est drawProjectiles / drawFlashes.
 function drawAttackFx(ctx) {
   for (const fx of game.attackFx) {
     const alpha = 1 - fx.age / fx.ttl;
@@ -2643,6 +2650,201 @@ function drawAttackFx(ctx) {
     ctx.lineTo(fx.x2, fx.y2);
     ctx.stroke();
     ctx.restore();
+  }
+}
+
+// -------------------------------------------------------------
+// Projectiles (blasters Star Wars-style, profil par type d'unité)
+// -------------------------------------------------------------
+
+// Visuel + vitesse par classe d'unité
+const PROJECTILE_PROFILES = {
+  light:   { coreW: 5, coreH: 2,  haloW: 16, haloH: 8,  haloBlur: 8,
+             trailCount: 3, trailSpacing: 4, trailWidth: 2, speed: 700, isLaser: false },
+  heavy:   { coreW: 9, coreH: 4,  haloW: 24, haloH: 12, haloBlur: 12,
+             trailCount: 4, trailSpacing: 5, trailWidth: 3, speed: 480, isLaser: false },
+  swarmer: { coreW: 3, coreH: 1,  haloW: 8,  haloH: 4,  haloBlur: 6,
+             trailCount: 0, trailSpacing: 0, trailWidth: 0, speed: 900, isLaser: false },
+  sniper:  { coreW: 26, coreH: 1, haloW: 32, haloH: 4,  haloBlur: 10,
+             trailCount: 1, trailSpacing: 12, trailWidth: 1, speed: 1800, isLaser: true,
+             trailLong: true },
+  // Air drone (ajouté par Julien) : profil similaire au light
+  air:     { coreW: 5, coreH: 2,  haloW: 16, haloH: 8,  haloBlur: 8,
+             trailCount: 3, trailSpacing: 4, trailWidth: 2, speed: 750, isLaser: false },
+};
+
+const PROJECTILE_COLORS = {
+  player: {
+    haloOuter: [80, 180, 255],
+    haloInner: [140, 220, 255],
+    core:      [220, 245, 255],
+    coreInner: [240, 250, 255],
+    trail:     [120, 220, 255],
+  },
+  enemy: {
+    haloOuter: [255, 80, 50],
+    haloInner: [255, 140, 90],
+    core:      [255, 220, 180],
+    coreInner: [255, 240, 220],
+    trail:     [255, 140, 90],
+  },
+};
+
+function rgba(c, alpha) {
+  return `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${alpha})`;
+}
+
+function spawnProjectile(fromX, fromY, toX, toY, unitType, side) {
+  const profile = PROJECTILE_PROFILES[unitType] || PROJECTILE_PROFILES.light;
+  const dx = toX - fromX, dy = toY - fromY;
+  const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+  const ttl = dist / profile.speed;
+  game.projectiles.push({
+    startX: fromX, startY: fromY,
+    endX: toX, endY: toY,
+    x: fromX, y: fromY,
+    angle: Math.atan2(dy, dx),
+    age: 0, ttl,
+    profile: unitType,
+    side,
+  });
+  // Muzzle flash à l'origine
+  game.flashes.push({
+    x: fromX, y: fromY, age: 0, ttl: 0.08, kind: "muzzle", side,
+  });
+}
+
+function updateProjectiles(dt) {
+  for (const p of game.projectiles) {
+    p.age += dt;
+    if (p.age >= p.ttl) {
+      // Impact flash quand le bolt arrive
+      game.flashes.push({
+        x: p.endX, y: p.endY, age: 0, ttl: 0.14, kind: "impact", side: p.side,
+      });
+    } else {
+      const t = p.age / p.ttl;
+      p.x = p.startX + (p.endX - p.startX) * t;
+      p.y = p.startY + (p.endY - p.startY) * t;
+    }
+  }
+  game.projectiles = game.projectiles.filter((p) => p.age < p.ttl);
+}
+
+function updateFlashes(dt) {
+  for (const f of game.flashes) f.age += dt;
+  game.flashes = game.flashes.filter((f) => f.age < f.ttl);
+}
+
+function drawProjectiles(ctx) {
+  for (const p of game.projectiles) {
+    const profile = PROJECTILE_PROFILES[p.profile] || PROJECTILE_PROFILES.light;
+    const colors = PROJECTILE_COLORS[p.side];
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.angle);
+
+    // ── Trail (segments fading derrière le bolt)
+    if (profile.trailCount > 0) {
+      for (let t = 0; t < profile.trailCount; t++) {
+        const offset = -(profile.coreW + 2 + t * profile.trailSpacing);
+        const alpha = Math.max(0, (180 - t * 45) / 255);
+        ctx.fillStyle = rgba(colors.trail, alpha);
+        if (profile.trailLong) {
+          // Sniper : trait long fading
+          ctx.fillRect(offset - 10, -0.5, 10, 1);
+        } else {
+          // Light / heavy : ovales fading
+          const tw = profile.trailWidth;
+          ctx.beginPath();
+          ctx.ellipse(offset, 0, tw, Math.max(1, tw / 2), 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    // ── Halo (shadow blur pour effet glow)
+    ctx.shadowBlur = profile.haloBlur;
+    ctx.shadowColor = rgba(colors.haloOuter, 0.9);
+    ctx.fillStyle = rgba(colors.haloInner, 0.7);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, profile.haloW / 2, profile.haloH / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // ── Core
+    ctx.fillStyle = rgba(colors.core, 1);
+    if (profile.isLaser) {
+      // Laser sniper : rectangle fin
+      ctx.fillRect(-profile.coreW, -profile.coreH, profile.coreW * 2, profile.coreH * 2 + 1);
+      // Trait blanc pur au milieu
+      ctx.fillStyle = rgba(colors.coreInner, 1);
+      ctx.fillRect(-profile.coreW + 2, -0.5, (profile.coreW - 2) * 2, 1);
+    } else {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, profile.coreW, profile.coreH, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = rgba(colors.coreInner, 1);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, Math.max(1, profile.coreW - 2), Math.max(0.5, profile.coreH - 1), 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+}
+
+function drawFlashes(ctx) {
+  for (const f of game.flashes) {
+    const colors = PROJECTILE_COLORS[f.side];
+    const t = f.age / f.ttl;            // 0 → 1
+    const alpha = 1 - t;                 // fade out
+    if (f.kind === "muzzle") {
+      // Muzzle = petit éclat jaune-blanc rapide (cohérent pour les 2 sides)
+      const r = 6 + 4 * t;
+      ctx.save();
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = rgba(colors.haloOuter, alpha);
+      ctx.fillStyle = `rgba(255, 240, 200, ${alpha * 0.9})`;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      // Core blanc
+      ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, r * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (f.kind === "impact") {
+      // Impact = étoile + cercle qui s'élargit
+      const r = 4 + 12 * t;
+      ctx.save();
+      ctx.shadowBlur = 14;
+      ctx.shadowColor = rgba(colors.haloOuter, alpha);
+      // Cercle qui grandit (onde)
+      ctx.strokeStyle = rgba(colors.haloInner, alpha * 0.6);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+      // Coeur de l'explosion
+      ctx.fillStyle = `rgba(255, 240, 200, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, 4 * (1 - t * 0.5), 0, Math.PI * 2);
+      ctx.fill();
+      // 4 traits de l'étoile
+      ctx.strokeStyle = `rgba(255, 240, 200, ${alpha})`;
+      ctx.lineWidth = 1.5;
+      const armLen = 8 * (1 - t);
+      for (let ang = 0; ang < Math.PI * 2; ang += Math.PI / 2) {
+        ctx.beginPath();
+        ctx.moveTo(f.x + Math.cos(ang) * 2, f.y + Math.sin(ang) * 2);
+        ctx.lineTo(f.x + Math.cos(ang) * (2 + armLen), f.y + Math.sin(ang) * (2 + armLen));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 }
 
@@ -4682,6 +4884,8 @@ function resetGame() {
     type: p.type, x: p.x, y: p.y, def: PROP_TYPES[p.type],
   }));
   game.attackFx = [];
+  game.projectiles = [];
+  game.flashes = [];
   game.explosions = [];
   game.lightning = null;
   game.lightningCooldown = 0;
