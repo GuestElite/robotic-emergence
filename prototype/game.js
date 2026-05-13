@@ -3598,7 +3598,24 @@ function drawUpgradePanel(ctx) {
   ctx.font = "bold 14px -apple-system, sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillText(`🏭 Factory ${type.label}`, x + 14, cursorY);
+  const headerLabel = `🏭 Factory ${type.label}`;
+  ctx.fillText(headerLabel, x + 14, cursorY);
+
+  // Badge tier coloré juste à droite du nom (II / III)
+  const fTier = factory.tier || 1;
+  if (fTier > 1) {
+    const accent = fTier === 2 ? "#22d3ee" : "#fbbf24";
+    const labelW = ctx.measureText(headerLabel).width;
+    ctx.save();
+    ctx.fillStyle = accent;
+    roundedRect(ctx, x + 14 + labelW + 6, cursorY - 1, 26, 16, 4);
+    ctx.fill();
+    ctx.fillStyle = "#0a0e1a";
+    ctx.font = "bold 9px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(fTier === 2 ? "II" : "III", x + 14 + labelW + 6 + 13, cursorY + 7);
+    ctx.restore();
+  }
 
   ctx.fillStyle = COLORS.hudMuted;
   ctx.font = "10px -apple-system, sans-serif";
@@ -3606,6 +3623,19 @@ function drawUpgradePanel(ctx) {
   ctx.fillText(`Investi : ${factory.totalInvested}💰`, x + w - 38, cursorY + 2);
 
   cursorY += 22;
+
+  // Petite ligne info des bonus tier (×HP/dmg, cadence, portée)
+  if (fTier > 1) {
+    const accent = fTier === 2 ? "#22d3ee" : "#fbbf24";
+    ctx.fillStyle = accent;
+    ctx.font = "10px -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    const tm = TIER_MULTIPLIER[fTier];
+    const pm = TIER_PROD_MULTIPLIER[fTier];
+    const prodPct = Math.round((1 / pm - 1) * 100);
+    ctx.fillText(`✦ Tier ${fTier === 2 ? "II" : "III"} : HP/dmg ×${tm.toFixed(2)}  ·  cadence +${prodPct}%`, x + 14, cursorY);
+    cursorY += 16;
+  }
 
   // Toggle Attaque / Défense (côté joueur uniquement, sinon affiché en lecture seule)
   const modeRects = drawModeToggle(ctx, x + 12, cursorY, w - 24, factory, side);
@@ -4008,31 +4038,40 @@ function formatStatPreview(factory, stat) {
   const lvlNext = Math.min(lvl + 1, MAX_UPGRADE_LEVEL);
   const fmt = (v) => Number(v).toFixed(stat.id === "creationRate" || stat.id === "shootRate" ? 2 : 0);
 
+  // Multiplicateurs liés au tier de la factory (mirroring spawnStatsFor /
+  // effectiveProdInterval pour que le preview reflète la VRAIE valeur in-game).
+  const tier = factory.tier || 1;
+  const tierMult     = TIER_MULTIPLIER[tier] || 1;     // hp + damage
+  const speedMult    = TIER_SPEED_MULTIPLIER[tier] || 1;
+  const rangeMult    = TIER_RANGE_MULTIPLIER[tier] || 1;
+  const prodMult     = TIER_PROD_MULTIPLIER[tier] || 1;
+  const atkMult      = tier === 1 ? 1 : tier === 2 ? 0.80 : 0.62; // attackInterval
+
   let cur, next;
   switch (stat.id) {
     case "creationRate":
-      cur = type.prodInterval / statMultiplier(lvl, 0.20);
-      next = type.prodInterval / statMultiplier(lvlNext, 0.20);
+      cur  = (type.prodInterval * prodMult) / statMultiplier(lvl, 0.20);
+      next = (type.prodInterval * prodMult) / statMultiplier(lvlNext, 0.20);
       return `${fmt(cur)}s → ${fmt(next)}s / unité`;
     case "health":
-      cur = ut.hp * statMultiplier(lvl, 0.25);
-      next = ut.hp * statMultiplier(lvlNext, 0.25);
+      cur  = ut.hp * statMultiplier(lvl, 0.25)   * tierMult;
+      next = ut.hp * statMultiplier(lvlNext, 0.25) * tierMult;
       return `${fmt(cur)} → ${fmt(next)} PV / unité`;
     case "shootRate":
-      cur = ut.attackInterval / statMultiplier(lvl, 0.18);
-      next = ut.attackInterval / statMultiplier(lvlNext, 0.18);
+      cur  = (ut.attackInterval * atkMult) / statMultiplier(lvl, 0.18);
+      next = (ut.attackInterval * atkMult) / statMultiplier(lvlNext, 0.18);
       return `${fmt(cur)}s → ${fmt(next)}s / tir`;
     case "range":
-      cur = ut.range * statMultiplier(lvl, 0.12);
-      next = ut.range * statMultiplier(lvlNext, 0.12);
+      cur  = ut.range * statMultiplier(lvl, 0.12)   * rangeMult;
+      next = ut.range * statMultiplier(lvlNext, 0.12) * rangeMult;
       return `${fmt(cur)} → ${fmt(next)} px`;
     case "speed":
-      cur = ut.speed * statMultiplier(lvl, 0.15);
-      next = ut.speed * statMultiplier(lvlNext, 0.15);
+      cur  = ut.speed * statMultiplier(lvl, 0.15)   * speedMult;
+      next = ut.speed * statMultiplier(lvlNext, 0.15) * speedMult;
       return `${fmt(cur)} → ${fmt(next)} px/s`;
     case "power":
-      cur = ut.damage * statMultiplier(lvl, 0.22);
-      next = ut.damage * statMultiplier(lvlNext, 0.22);
+      cur  = ut.damage * statMultiplier(lvl, 0.22)   * tierMult;
+      next = ut.damage * statMultiplier(lvlNext, 0.22) * tierMult;
       return `${fmt(cur)} → ${fmt(next)} dégâts`;
     default:
       return "";
