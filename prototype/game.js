@@ -543,6 +543,7 @@ const game = {
   ui: {
     selectedBuildType: null,
     hoverSlot: null,
+    hoverUnit: null,             // unité (mobile ou turret) survolée par la souris — affiche son cercle de portée
     mouse: { x: 0, y: 0 },
     mouseScreen: { x: 0, y: 0 },
     mouseInside: false,
@@ -1566,23 +1567,25 @@ function checkGameOver() {
 }
 
 // Notifie le backend (solo) ou diffuse en MP (host) la fin de partie.
+// Dans tous les cas le joueur courant enregistre son résultat perso pour
+// que la monnaie et les missions soient bien créditées.
 function notifyGameOver(winnerSide) {
+  const myResult = winnerSide === mySide() ? "win" : "lose";
   if (game.mode === "mp" && game.mp?.role === "host" && window.RE_MP) {
     const mappedWinner = winnerSide === "player" ? "host" : "guest";
     try { window.RE_MP.sendGameOver(winnerSide); } catch {}
     try { window.RE_MP.reportFinish(mappedWinner); } catch {}
-    return;
   }
-  // Solo : on remonte le résultat du joueur (gauche).
-  const result = winnerSide === "player" ? "win" : "lose";
-  sendGameResultToBackend(result);
+  sendGameResultToBackend(myResult);
 }
 
 // Pousse les stats de partie vers Supabase (via auth-bridge.js).
 // Met à jour le solde local du joueur et la progression des missions.
+// Le snapshot de stats utilisé est celui du côté que le joueur a réellement contrôlé
+// (mySide()) — important en MP où le guest pilote le côté "enemy".
 async function sendGameResultToBackend(result) {
   if (!window.RE_AUTH || !window.RE_AUTH.session) return;
-  const ps = game.stats.player;
+  const ps = game.stats[mySide()] || game.stats.player;
   const payload = {
     difficulty:    game.difficulty,
     result,
@@ -1596,7 +1599,7 @@ async function sendGameResultToBackend(result) {
   };
   try {
     const res = await window.RE_AUTH.finishGame(payload);
-    if (res?.ok) {
+    if (res?.ok && game.gameOver) {
       game.gameOver.reward = res.reward;
     }
   } catch (e) {
@@ -1860,6 +1863,7 @@ function render(ctx) {
   drawProjectiles(ctx);
   drawFlashes(ctx);
   drawExplosions(ctx);
+  drawHoverRange(ctx);
   drawLightning(ctx);
   drawLightningAim(ctx);
   ctx.restore();
@@ -2465,6 +2469,50 @@ function drawBaseHP(ctx, side) {
 // -------------------------------------------------------------
 // Rendu — unités
 // -------------------------------------------------------------
+
+// Cercle de portée de tir affiché autour de l'unité survolée par la souris.
+// Dessiné dans le repère monde (entre drawUnits et drawAttackFx). Affiche également
+// la zone de "détection" pour les unités en mode défense, en pointillés.
+function drawHoverRange(ctx) {
+  const u = game.ui.hoverUnit;
+  if (!u || u.hp <= 0 || !u.stats) return;
+  const range = u.stats.range || 0;
+  if (range <= 0) return;
+
+  const color = u.side === "player" ? COLORS.player : COLORS.enemy;
+
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.85;
+  ctx.beginPath();
+  ctx.arc(u.x, u.y, range, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Remplissage léger pour la zone
+  ctx.globalAlpha = 0.10;
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  ctx.restore();
+
+  // Petit label de portée
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.6)";
+  const label = `${Math.round(range)} px`;
+  ctx.font = "bold 11px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const labelW = ctx.measureText(label).width + 10;
+  const labelX = u.x - labelW / 2;
+  const labelY = u.y - (u.stats.radius || 10) - 24;
+  ctx.fillStyle = "rgba(0,0,0,0.7)";
+  roundedRect(ctx, labelX, labelY, labelW, 18, 4);
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.fillText(label, u.x, labelY + 9);
+  ctx.restore();
+}
 
 function drawUnits(ctx) {
   for (const u of game.units) {
@@ -4434,6 +4482,7 @@ function setupInput(canvas) {
   canvas.addEventListener("mouseleave", () => {
     game.ui.mouseInside = false;
     game.ui.hoverSlot = null;
+    game.ui.hoverUnit = null;
     game.ui.draggingSlider = null;
   });
 
@@ -4500,6 +4549,23 @@ function setupInput(canvas) {
           break;
         }
       }
+    }
+
+    // Hover unité (mobile ou turret) : on retient la plus proche dans son rayon.
+    // Sert à dessiner son cercle de portée de tir au-dessus du monde.
+    game.ui.hoverUnit = null;
+    if (Array.isArray(game.units)) {
+      let best = null;
+      let bestD2 = Infinity;
+      for (const u of game.units) {
+        if (!u || u.hp <= 0 || !u.stats) continue;
+        const r = (u.stats.radius || 8) + 4; // marge pour faciliter le hover
+        const dx = wx - u.x;
+        const dy = wy - u.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= r * r && d2 < bestD2) { best = u; bestD2 = d2; }
+      }
+      game.ui.hoverUnit = best;
     }
   });
 
@@ -4581,11 +4647,61 @@ function setupInput(canvas) {
     // Salle d'attente / lobby
     if (game.screen === "lobby") {
       const lr = game.ui.lobbyRects;
+      const page = game.ui.lobbyPage || "choice";
       if (!lr) return;
-      if (lr.cancel && pointInRect(sx, sy, lr.cancel)) {
-        audio.playSFX("click");
-        cancelMultiplayer();
-        return;
+
+      if (page === "choice") {
+        if (lr.choiceCreate && pointInRect(sx, sy, lr.choiceCreate)) {
+          audio.playSFX("click");
+          mpCreateRoom();
+          return;
+        }
+        if (lr.choiceJoin && pointInRect(sx, sy, lr.choiceJoin)) {
+          audio.playSFX("click");
+          game.ui.lobbyPage = "join";
+          game.ui.codeInput = "";
+          game.ui.codeInputError = null;
+          return;
+        }
+        if (lr.back && pointInRect(sx, sy, lr.back)) {
+          audio.playSFX("click");
+          cancelMultiplayer();
+          return;
+        }
+      } else if (page === "join") {
+        if (lr.joinOk && pointInRect(sx, sy, lr.joinOk)) {
+          audio.playSFX("click");
+          mpJoinByCode(game.ui.codeInput);
+          return;
+        }
+        if (lr.back && pointInRect(sx, sy, lr.back)) {
+          audio.playSFX("click");
+          game.ui.lobbyPage = "choice";
+          game.ui.codeInputError = null;
+          return;
+        }
+      } else if (page === "room") {
+        if (lr.ready && pointInRect(sx, sy, lr.ready)) {
+          const hasOpp = !!(game.mp?.opponent?.username);
+          if (!hasOpp) return; // pas de prêt sans adversaire
+          audio.playSFX("click");
+          mpToggleReady();
+          return;
+        }
+        if (lr.copy && pointInRect(sx, sy, lr.copy) && game.mp?.code) {
+          audio.playSFX("click");
+          try {
+            navigator.clipboard.writeText(game.mp.code);
+            game.ui.codeCopied = true;
+            setTimeout(() => { game.ui.codeCopied = false; }, 1500);
+          } catch {}
+          return;
+        }
+        if (lr.leave && pointInRect(sx, sy, lr.leave)) {
+          audio.playSFX("click");
+          cancelMultiplayer();
+          return;
+        }
       }
       return;
     }
@@ -4828,7 +4944,40 @@ function setupInput(canvas) {
       return;
     }
     if (game.screen === "lobby") {
-      if (evt.key === "Escape") cancelMultiplayer();
+      const page = game.ui.lobbyPage || "choice";
+      if (evt.key === "Escape") {
+        if (page === "choice") cancelMultiplayer();
+        else if (page === "join") { game.ui.lobbyPage = "choice"; game.ui.codeInputError = null; }
+        else if (page === "room") cancelMultiplayer();
+        return;
+      }
+      if (page === "join") {
+        if (evt.key === "Enter") {
+          mpJoinByCode(game.ui.codeInput);
+          return;
+        }
+        if (evt.key === "Backspace") {
+          game.ui.codeInput = (game.ui.codeInput || "").slice(0, -1);
+          game.ui.codeInputError = null;
+          return;
+        }
+        // alphanumerique seulement, max 6 caractères
+        if (evt.key && evt.key.length === 1 && /^[a-zA-Z0-9]$/.test(evt.key)) {
+          const cur = game.ui.codeInput || "";
+          if (cur.length < 6) {
+            game.ui.codeInput = (cur + evt.key.toUpperCase());
+            game.ui.codeInputError = null;
+          }
+          return;
+        }
+      } else if (page === "room") {
+        if (evt.key === "Enter" || evt.key === " ") {
+          if (game.mp?.opponent?.username) mpToggleReady();
+        }
+      } else if (page === "choice") {
+        if (evt.key === "1") mpCreateRoom();
+        if (evt.key === "2") { game.ui.lobbyPage = "join"; game.ui.codeInput = ""; game.ui.codeInputError = null; }
+      }
       return;
     }
     if (game.gameOver) {
@@ -4947,12 +5096,12 @@ function goToMenu() {
 // Multijoueur — orchestration côté client (lobby + sync via Realtime)
 // -------------------------------------------------------------
 
-async function startMultiplayer() {
+// Entrée dans le mode multijoueur : passe au menu "Créer ou Rejoindre un salon".
+function startMultiplayer() {
   if (!window.RE_MP) {
     flashLobbyMessage("Multijoueur indisponible — recharge la page.", "error");
     return;
   }
-  // Authentification requise pour rejoindre un lobby
   const profile = window.RE_AUTH?.profile;
   if (!profile) {
     window.location.href = "/auth/login.html?next=/prototype/";
@@ -4963,66 +5112,130 @@ async function startMultiplayer() {
   game.mp = {
     role: null,
     lobbyId: null,
+    code: null,
     opponent: null,
-    status: "joining",
+    status: "idle",
+    hostReady: false,
+    guestReady: false,
     snapAccum: 0,
-    waitingStartedAt: performance.now(),
   };
   game.screen = "lobby";
-  game.ui.lobbyMessage = "Recherche d'un adversaire…";
+  game.ui.lobbyPage = "choice";
+  game.ui.lobbyMessage = "";
+  game.ui.codeInput = "";
+  game.ui.codeInputError = null;
 
-  // Sub aux events Realtime
+  // Sub aux events Realtime (idempotent : on le fait 1 seule fois par session de page)
   if (!game.mp.subscribed) {
     window.RE_MP.onInput(handleMpInput);
     window.RE_MP.onSnapshot(applyMpSnapshot);
     window.RE_MP.onGameOver(handleMpGameOver);
     window.RE_MP.onOpponentLeave(handleMpOpponentLeave);
-    window.RE_MP.onPaired(handleMpPaired);
+    window.RE_MP.onLobbyUpdate(handleMpLobbyUpdate);
+    window.RE_MP.onStart(handleMpStart);
     game.mp.subscribed = true;
   }
+}
 
-  const res = await window.RE_MP.joinOrCreate({
+async function mpCreateRoom() {
+  flashLobbyMessage("Création du salon…");
+  const res = await window.RE_MP.createLobby({
     biome: game.biome,
     difficulty: game.difficulty,
   });
   if (res?.error) {
     flashLobbyMessage(`Erreur : ${res.error}`, "error");
-    game.mode = "solo";
-    game.mp = null;
-    setTimeout(() => { if (game.screen === "lobby") game.screen = "menu"; }, 1500);
     return;
   }
-
-  game.mp.role = res.role;
+  game.mp.role = "host";
   game.mp.lobbyId = res.lobbyId;
-  game.mp.opponent = res.opponent;
-  game.mp.seed = res.seed;
-  game.biome = res.biome || game.biome;
-  game.difficulty = res.difficulty || game.difficulty;
-  if (DIFFICULTY_PRESETS[game.difficulty]) {
-    game.preset = DIFFICULTY_PRESETS[game.difficulty];
+  game.mp.code = res.code;
+  game.mp.status = "waiting";
+  if (res.biome) game.biome = res.biome;
+  if (res.difficulty) {
+    game.difficulty = res.difficulty;
+    if (DIFFICULTY_PRESETS[res.difficulty]) game.preset = DIFFICULTY_PRESETS[res.difficulty];
   }
+  game.ui.lobbyPage = "room";
+  game.ui.lobbyMessage = "";
+}
 
-  if (res.role === "guest") {
-    // On a rejoint un lobby waiting : la partie démarre.
-    game.mp.status = "playing";
-    startMpGame();
-  } else {
-    // Host : on attend qu'un guest rejoigne
-    game.mp.status = "waiting";
-    game.ui.lobbyMessage = "En attente d'un adversaire…";
+async function mpJoinByCode(code) {
+  const trimmed = (code || "").trim().toUpperCase();
+  if (!trimmed) {
+    game.ui.codeInputError = "Entre un code à 6 caractères.";
+    return;
+  }
+  flashLobbyMessage("Connexion au salon…");
+  const res = await window.RE_MP.joinByCode(trimmed);
+  if (res?.error) {
+    const labels = {
+      lobby_not_found: "Salon introuvable.",
+      lobby_full: "Ce salon est déjà plein.",
+      cannot_join_own_lobby: "C'est ton propre salon — partage le code à un ami.",
+      invalid_code: "Code invalide.",
+      not_authenticated: "Connecte-toi pour rejoindre un salon.",
+    };
+    game.ui.codeInputError = labels[res.error] || `Erreur : ${res.error}`;
+    flashLobbyMessage("");
+    return;
+  }
+  game.mp.role = "guest";
+  game.mp.lobbyId = res.lobbyId;
+  game.mp.code = res.code;
+  game.mp.opponent = { id: null, username: res.host_username };
+  game.mp.status = res.status || "waiting";
+  if (res.biome) game.biome = res.biome;
+  if (res.difficulty) {
+    game.difficulty = res.difficulty;
+    if (DIFFICULTY_PRESETS[res.difficulty]) game.preset = DIFFICULTY_PRESETS[res.difficulty];
+  }
+  game.ui.lobbyPage = "room";
+  game.ui.codeInputError = null;
+  game.ui.lobbyMessage = "";
+}
+
+async function mpToggleReady() {
+  if (!game.mp || !game.mp.lobbyId) return;
+  const cur = (game.mp.role === "host" ? game.mp.hostReady : game.mp.guestReady);
+  const res = await window.RE_MP.setReady(!cur);
+  if (res?.error) {
+    flashLobbyMessage(`Erreur : ${res.error}`, "error");
+    return;
+  }
+  game.mp.hostReady = res.hostReady;
+  game.mp.guestReady = res.guestReady;
+  // si bothReady, le serveur a flippé le status — handleMpStart sera déclenché
+  // par la sub postgres_changes (et le poll fallback).
+}
+
+function handleMpLobbyUpdate({ status, hostReady, guestReady, opponent, code }) {
+  if (!game.mp) return;
+  game.mp.hostReady = hostReady;
+  game.mp.guestReady = guestReady;
+  if (code) game.mp.code = code;
+  if (status === "abandoned" || status === "finished") {
+    game.mp.status = status;
+  } else if (status) {
+    game.mp.status = status;
+  }
+  if (game.mp.role === "host" && opponent && (!game.mp.opponent || game.mp.opponent.id !== opponent.id)) {
+    game.mp.opponent = opponent;
+  } else if (game.mp.role === "guest" && opponent) {
+    game.mp.opponent = opponent;
   }
 }
 
-function handleMpPaired({ opponent, biome, difficulty }) {
+function handleMpStart({ seed, biome, difficulty, opponent }) {
   if (!game.mp) return;
-  game.mp.opponent = opponent;
-  game.mp.status = "playing";
+  game.mp.opponent = opponent || game.mp.opponent;
+  game.mp.seed = seed || game.mp.seed;
   if (biome) game.biome = biome;
   if (difficulty) {
     game.difficulty = difficulty;
     if (DIFFICULTY_PRESETS[difficulty]) game.preset = DIFFICULTY_PRESETS[difficulty];
   }
+  game.mp.status = "playing";
   startMpGame();
 }
 
@@ -5052,74 +5265,305 @@ function flashLobbyMessage(msg, level = "info") {
   game.ui.lobbyMessageLevel = level;
 }
 
-function drawLobbyScreen(ctx) {
-  // Fond
+function drawLobbyBackground(ctx) {
   const grad = ctx.createLinearGradient(0, 0, 0, CONFIG.H);
   grad.addColorStop(0, "#0a0e1a");
   grad.addColorStop(1, "#1a2030");
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+}
 
+function drawLobbyButton(ctx, rect, label, sub, color, colorDark) {
+  const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+  ctx.fillStyle = hover ? color : colorDark;
+  roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 12);
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  if (hover) {
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 14;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 22px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2 - (sub ? 10 : 0));
+  if (sub) {
+    ctx.font = "12px -apple-system, sans-serif";
+    ctx.fillStyle = "rgba(255,255,255,0.78)";
+    ctx.fillText(sub, rect.x + rect.w / 2, rect.y + rect.h / 2 + 14);
+  }
+}
+
+function drawLobbyScreen(ctx) {
+  drawLobbyBackground(ctx);
+  const page = game.ui.lobbyPage || "choice";
+  if (page === "choice")      drawLobbyChoice(ctx);
+  else if (page === "create") drawLobbyCreate(ctx);
+  else if (page === "join")   drawLobbyJoin(ctx);
+  else if (page === "room")   drawLobbyRoom(ctx);
+}
+
+function drawLobbyChoice(ctx) {
   const cx = CONFIG.CANVAS_W / 2;
-
   ctx.fillStyle = COLORS.hudText;
   ctx.font = "bold 44px -apple-system, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.shadowColor = COLORS.enemy;
   ctx.shadowBlur = 18;
-  ctx.fillText("👥 SALLE D'ATTENTE", cx, 180);
+  ctx.fillText("👥 MULTIJOUEUR", cx, 150);
   ctx.shadowBlur = 0;
 
-  // Spinner pulsé
-  const t = (performance.now() % 1200) / 1200;
-  const pulse = 0.55 + 0.45 * Math.sin(t * Math.PI * 2);
-  ctx.fillStyle = `rgba(239, 68, 68, ${pulse.toFixed(3)})`;
-  ctx.beginPath();
-  ctx.arc(cx, 270, 16, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Message principal
-  ctx.fillStyle = COLORS.hudText;
-  ctx.font = "20px -apple-system, sans-serif";
-  ctx.fillText(game.ui.lobbyMessage || "Connexion…", cx, 320);
-
-  // Infos lobby
-  ctx.font = "13px -apple-system, sans-serif";
   ctx.fillStyle = COLORS.hudMuted;
-  if (game.mp?.role && game.mp?.lobbyId) {
-    const rolePretty = game.mp.role === "host" ? "Hôte (tu seras à gauche, équipe bleue)" : "Invité (tu seras à droite, équipe rouge)";
-    ctx.fillText(rolePretty, cx, 354);
-    ctx.fillText(`Biome : ${BIOME_LABELS[game.biome] || game.biome}  ·  Difficulté : ${DIFFICULTY_PRESETS[game.difficulty]?.label || game.difficulty}`, cx, 376);
-    ctx.fillText(`Salon : ${game.mp.lobbyId.slice(0, 8)}`, cx, 396);
-  }
-  if (game.mp?.opponent?.username) {
-    ctx.fillStyle = COLORS.hpGood;
-    ctx.font = "bold 16px -apple-system, sans-serif";
-    ctx.fillText(`Adversaire : ${game.mp.opponent.username}`, cx, 426);
-  }
+  ctx.font = "14px -apple-system, sans-serif";
+  ctx.fillText("Crée un salon et partage le code avec un ami, ou rejoins le sien.", cx, 195);
 
-  // Bouton annuler
-  const cancelW = 200, cancelH = 50;
-  const cancelRect = { x: cx - cancelW / 2, y: 500, w: cancelW, h: cancelH };
-  const cancelHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, cancelRect);
-  ctx.fillStyle = cancelHover ? "rgba(239,68,68,0.45)" : "rgba(239,68,68,0.22)";
-  roundedRect(ctx, cancelRect.x, cancelRect.y, cancelRect.w, cancelRect.h, 10);
+  const btnW = 320, btnH = 90;
+  const gap = 24;
+  const totalH = btnH * 2 + gap;
+  const startY = 250;
+
+  const createRect = { x: cx - btnW / 2, y: startY, w: btnW, h: btnH };
+  const joinRect   = { x: cx - btnW / 2, y: startY + btnH + gap, w: btnW, h: btnH };
+  drawLobbyButton(ctx, createRect, "✨  CRÉER UN SALON", "Génère un code à partager", COLORS.player, COLORS.playerDark);
+  drawLobbyButton(ctx, joinRect, "🔑  REJOINDRE UN SALON", "Entre le code de l'hôte", COLORS.enemy, COLORS.enemyDark || "rgba(220,38,38,0.4)");
+
+  // Bouton retour
+  const backW = 180, backH = 40;
+  const backRect = { x: cx - backW / 2, y: startY + totalH + 36, w: backW, h: backH };
+  const backHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, backRect);
+  ctx.fillStyle = backHover ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
+  roundedRect(ctx, backRect.x, backRect.y, backRect.w, backRect.h, 8);
   ctx.fill();
-  ctx.strokeStyle = COLORS.enemy;
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "rgba(255,255,255,0.25)";
+  ctx.lineWidth = 1;
   ctx.stroke();
   ctx.fillStyle = "#fff";
-  ctx.font = "bold 16px -apple-system, sans-serif";
+  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.fillText("↩  Retour au menu", backRect.x + backRect.w / 2, backRect.y + backRect.h / 2);
+
+  if (game.ui.lobbyMessage) {
+    ctx.fillStyle = (game.ui.lobbyMessageLevel === "error") ? COLORS.enemy : COLORS.hudMuted;
+    ctx.font = "13px -apple-system, sans-serif";
+    ctx.fillText(game.ui.lobbyMessage, cx, CONFIG.H - 60);
+  }
+
+  game.ui.lobbyRects = { choiceCreate: createRect, choiceJoin: joinRect, back: backRect };
+}
+
+function drawLobbyJoin(ctx) {
+  const cx = CONFIG.CANVAS_W / 2;
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 36px -apple-system, sans-serif";
+  ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("↩  Annuler", cancelRect.x + cancelRect.w / 2, cancelRect.y + cancelRect.h / 2);
+  ctx.fillText("🔑 REJOINDRE UN SALON", cx, 150);
 
-  // Footer
   ctx.fillStyle = COLORS.hudMuted;
-  ctx.font = "11px -apple-system, sans-serif";
-  ctx.fillText("La partie démarre dès qu'un autre joueur rejoint le salon.", cx, CONFIG.H - 40);
+  ctx.font = "14px -apple-system, sans-serif";
+  ctx.fillText("Entre le code à 6 caractères partagé par l'hôte.", cx, 200);
 
-  game.ui.lobbyRects = { cancel: cancelRect };
+  // Champ de code
+  const inputW = 360, inputH = 70;
+  const inputRect = { x: cx - inputW / 2, y: 240, w: inputW, h: inputH };
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  roundedRect(ctx, inputRect.x, inputRect.y, inputRect.w, inputRect.h, 10);
+  ctx.fill();
+  ctx.strokeStyle = COLORS.player;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  const code = (game.ui.codeInput || "").padEnd(6, "·");
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 38px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  // Espacement entre les caractères pour la lisibilité
+  const chars = code.split("");
+  const spacing = 38;
+  const totalW = (chars.length - 1) * spacing;
+  for (let i = 0; i < chars.length; i++) {
+    const cxc = cx - totalW / 2 + i * spacing;
+    const c = chars[i];
+    ctx.fillStyle = c === "·" ? "rgba(255,255,255,0.18)" : "#fff";
+    ctx.fillText(c, cxc, inputRect.y + inputRect.h / 2);
+  }
+
+  // Hint clavier
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "12px -apple-system, sans-serif";
+  ctx.fillText("Tape le code au clavier — Entrée pour valider, Échap pour revenir.", cx, inputRect.y + inputRect.h + 22);
+
+  if (game.ui.codeInputError) {
+    ctx.fillStyle = COLORS.enemy;
+    ctx.font = "13px -apple-system, sans-serif";
+    ctx.fillText(game.ui.codeInputError, cx, inputRect.y + inputRect.h + 46);
+  }
+
+  // Boutons
+  const btnW = 180, btnH = 50, gap = 16;
+  const totalBtnW = btnW * 2 + gap;
+  const okRect   = { x: cx - totalBtnW / 2,             y: 390, w: btnW, h: btnH };
+  const backRect = { x: cx - totalBtnW / 2 + btnW + gap, y: 390, w: btnW, h: btnH };
+
+  const okHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, okRect);
+  const ready = (game.ui.codeInput || "").length === 6;
+  ctx.fillStyle = ready ? (okHover ? COLORS.player : COLORS.playerDark) : "rgba(255,255,255,0.10)";
+  roundedRect(ctx, okRect.x, okRect.y, okRect.w, okRect.h, 10);
+  ctx.fill();
+  ctx.strokeStyle = ready ? COLORS.player : "rgba(255,255,255,0.20)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = ready ? "#fff" : COLORS.hudMuted;
+  ctx.font = "bold 16px -apple-system, sans-serif";
+  ctx.fillText("Rejoindre", okRect.x + okRect.w / 2, okRect.y + okRect.h / 2);
+
+  const backHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, backRect);
+  ctx.fillStyle = backHover ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
+  roundedRect(ctx, backRect.x, backRect.y, backRect.w, backRect.h, 10);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.25)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.fillText("↩  Retour", backRect.x + backRect.w / 2, backRect.y + backRect.h / 2);
+
+  game.ui.lobbyRects = { joinOk: okRect, back: backRect, joinInput: inputRect };
+}
+
+function drawLobbyRoom(ctx) {
+  const cx = CONFIG.CANVAS_W / 2;
+  const mp = game.mp || {};
+
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 36px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("👥 SALON", cx, 100);
+
+  // Code du salon en grand
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "13px -apple-system, sans-serif";
+  ctx.fillText("CODE DU SALON — partage-le à ton adversaire", cx, 150);
+
+  const codeBoxW = 360, codeBoxH = 70;
+  const codeBox = { x: cx - codeBoxW / 2, y: 170, w: codeBoxW, h: codeBoxH };
+  ctx.fillStyle = "rgba(59,130,246,0.18)";
+  roundedRect(ctx, codeBox.x, codeBox.y, codeBox.w, codeBox.h, 12);
+  ctx.fill();
+  ctx.strokeStyle = COLORS.player;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 40px ui-monospace, SFMono-Regular, Menlo, monospace";
+  const codeText = (mp.code || "------").split("").join(" ");
+  ctx.fillText(codeText, cx, codeBox.y + codeBox.h / 2);
+
+  // Bouton copier le code
+  const copyW = 140, copyH = 32;
+  const copyRect = { x: cx - copyW / 2, y: codeBox.y + codeBox.h + 10, w: copyW, h: copyH };
+  const copyHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, copyRect);
+  ctx.fillStyle = copyHover ? "rgba(59,130,246,0.35)" : "rgba(59,130,246,0.18)";
+  roundedRect(ctx, copyRect.x, copyRect.y, copyRect.w, copyRect.h, 6);
+  ctx.fill();
+  ctx.strokeStyle = COLORS.player;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.fillText(game.ui.codeCopied ? "✓ Copié !" : "📋 Copier le code", copyRect.x + copyRect.w / 2, copyRect.y + copyRect.h / 2);
+
+  // Joueurs (host à gauche, guest à droite)
+  const playerCardW = 240, playerCardH = 110, playerGap = 32;
+  const totalCardW = playerCardW * 2 + playerGap;
+  const cardY = 305;
+  const hostCard  = { x: cx - totalCardW / 2,                      y: cardY, w: playerCardW, h: playerCardH };
+  const guestCard = { x: cx - totalCardW / 2 + playerCardW + playerGap, y: cardY, w: playerCardW, h: playerCardH };
+
+  drawPlayerCard(ctx, hostCard,  "Hôte (équipe bleue)", window.RE_AUTH?.profile?.username && mp.role === "host" ? window.RE_AUTH.profile.username : (mp.role === "host" ? "Toi" : (mp.opponent?.username || "Hôte")), mp.hostReady, COLORS.player);
+  drawPlayerCard(ctx, guestCard, "Invité (équipe rouge)", mp.role === "guest" ? (window.RE_AUTH?.profile?.username || "Toi") : (mp.opponent?.username || "(en attente…)"), mp.guestReady, COLORS.enemy);
+
+  // Statut du salon
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "13px -apple-system, sans-serif";
+  const opp = (mp.role === "host" ? mp.opponent?.username : mp.opponent?.username) || null;
+  let statusLine;
+  if (!opp) statusLine = "En attente d'un adversaire…";
+  else if (mp.hostReady && mp.guestReady) statusLine = "Lancement de la partie…";
+  else if ((mp.role === "host" && mp.hostReady) || (mp.role === "guest" && mp.guestReady)) statusLine = "Tu es prêt — en attente de l'adversaire.";
+  else statusLine = "Marque-toi prêt quand tu veux lancer la partie.";
+  ctx.fillText(statusLine, cx, cardY + playerCardH + 32);
+
+  // Bouton Prêt / Pas prêt
+  const myReady = mp.role === "host" ? mp.hostReady : mp.guestReady;
+  const canReady = !!opp; // pas de "prêt" tant qu'il n'y a pas d'adversaire
+  const readyW = 220, readyH = 56;
+  const readyRect = { x: cx - readyW / 2, y: cardY + playerCardH + 56, w: readyW, h: readyH };
+  const readyHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, readyRect);
+  if (!canReady) {
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+  } else if (myReady) {
+    ctx.fillStyle = readyHover ? "rgba(34,197,94,0.65)" : "rgba(34,197,94,0.45)";
+  } else {
+    ctx.fillStyle = readyHover ? COLORS.player : COLORS.playerDark;
+  }
+  roundedRect(ctx, readyRect.x, readyRect.y, readyRect.w, readyRect.h, 10);
+  ctx.fill();
+  ctx.strokeStyle = !canReady ? "rgba(255,255,255,0.18)" : (myReady ? COLORS.hpGood : COLORS.player);
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = canReady ? "#fff" : COLORS.hudMuted;
+  ctx.font = "bold 18px -apple-system, sans-serif";
+  ctx.fillText(myReady ? "✓ PRÊT (clic pour annuler)" : "Je suis prêt", readyRect.x + readyRect.w / 2, readyRect.y + readyRect.h / 2);
+
+  // Quitter le salon
+  const leaveW = 180, leaveH = 40;
+  const leaveRect = { x: cx - leaveW / 2, y: readyRect.y + readyH + 22, w: leaveW, h: leaveH };
+  const leaveHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, leaveRect);
+  ctx.fillStyle = leaveHover ? "rgba(239,68,68,0.45)" : "rgba(239,68,68,0.22)";
+  roundedRect(ctx, leaveRect.x, leaveRect.y, leaveRect.w, leaveRect.h, 8);
+  ctx.fill();
+  ctx.strokeStyle = COLORS.enemy;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px -apple-system, sans-serif";
+  ctx.fillText("Quitter le salon", leaveRect.x + leaveRect.w / 2, leaveRect.y + leaveRect.h / 2);
+
+  game.ui.lobbyRects = { ready: readyRect, leave: leaveRect, copy: copyRect, codeBox };
+}
+
+function drawPlayerCard(ctx, rect, role, name, ready, sideColor) {
+  ctx.fillStyle = "rgba(255,255,255,0.04)";
+  roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 12);
+  ctx.fill();
+  ctx.strokeStyle = ready ? COLORS.hpGood : "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = sideColor;
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.fillText(role, rect.x + rect.w / 2, rect.y + 22);
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 22px -apple-system, sans-serif";
+  ctx.fillText(name || "—", rect.x + rect.w / 2, rect.y + 56);
+
+  ctx.fillStyle = ready ? COLORS.hpGood : COLORS.hudMuted;
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.fillText(ready ? "✓ PRÊT" : "EN ATTENTE…", rect.x + rect.w / 2, rect.y + rect.h - 16);
+}
+
+function drawLobbyCreate(ctx) {
+  // (sous-écran inutilisé : la création passe directement à "room" après l'appel RPC)
+  drawLobbyRoom(ctx);
 }
 
 // Sérialise l'état partagé en multijoueur. Le host appelle ça à ~12 Hz.
@@ -5316,7 +5760,7 @@ function handleMpInput(input) {
 
 function handleMpGameOver({ winnerSide }) {
   if (game.gameOver) return;
-  // winnerSide est en perspective host : "player" ou "enemy"
+  // winnerSide est en perspective host : "player" (host gagne) ou "enemy" (guest gagne)
   game.gameOver = { winner: winnerSide || "player", at: performance.now() };
   audio.stopMusic();
   if (window.RE_MP && game.mp?.role === "host") {
@@ -5324,6 +5768,10 @@ function handleMpGameOver({ winnerSide }) {
     try { window.RE_MP.sendGameOver(winnerSide); } catch {}
     try { window.RE_MP.reportFinish(mappedWinner); } catch {}
   }
+  // Que ce soit côté host ou guest, on enregistre son propre résultat pour
+  // créditer la monnaie et faire avancer les missions.
+  const myResult = winnerSide === mySide() ? "win" : "lose";
+  sendGameResultToBackend(myResult);
 }
 
 function handleMpOpponentLeave() {

@@ -1,45 +1,48 @@
 // Multijoueur PvP host-authoritative pour Émergence.
-// Charge Supabase, gère le matchmaking via re_lobbies + RPC re_join_or_create_lobby,
-// et expose un canal Realtime (broadcast) pour transporter inputs et snapshots.
+// Flow par codes de salon explicites :
+//   - Le host appelle createLobby() -> reçoit un code à 6 caractères
+//   - Le guest appelle joinByCode(code) -> rejoint le salon
+//   - Chaque joueur appelle setReady(true) quand il est prêt
+//   - Quand les deux sont prêts, le statut bascule à "playing" et la partie démarre
 //
 // API exposée sur window.RE_MP :
-//   init()                     -> Promise<void>     : précharge la session
-//   joinOrCreate({ biome, difficulty }) -> Promise<{lobbyId, role, opponent, seed, biome, difficulty} | error>
-//   waitForOpponent()          -> Promise<{opponent}> : promesse résolue quand un guest rejoint (host)
-//   leave()                    -> Promise<void>     : annule la salle d'attente / quitte la partie
-//   sendInput(action)          -> void              : envoie un input au peer
-//   sendSnapshot(snap)         -> void              : host -> guest, état complet
-//   sendGameOver(winnerSide)   -> void              : host -> guest, fin de partie
-//   onInput(cb)                : sub aux inputs reçus (utilisé surtout par le host)
-//   onSnapshot(cb)             : sub aux snapshots reçus (utilisé par le guest)
-//   onGameOver(cb)             : sub aux events fin de partie
-//   onOpponentLeave(cb)        : sub à la déconnexion du peer
-//   reportFinish(winnerSide)   -> Promise<void>     : marque le lobby finished côté DB
-//   state                      : objet en lecture { lobbyId, role, opponent, status, biome, difficulty, seed }
+//   init()                                  -> Promise<profile|null>
+//   createLobby({biome, difficulty})        -> Promise<{lobbyId, code, role:'host', biome, difficulty, seed} | {error}>
+//   joinByCode(code)                        -> Promise<{lobbyId, code, role:'guest', host_username, biome, difficulty, seed} | {error}>
+//   setReady(ready: boolean)                -> Promise<{hostReady, guestReady, bothReady} | {error}>
+//   leave()                                 -> Promise<void>
+//   sendInput(action) / sendSnapshot(snap) / sendGameOver(winnerSide)
+//   reportFinish(winnerSide)
+//   on{Input,Snapshot,GameOver,OpponentLeave,LobbyUpdate,Start}(cb) -> unsubscribe
+//   state                                   -> lecture seule
 
 import { supabase, getProfile } from "/lib/supabase.js";
-
-const SOFT_TIMEOUT_MS = 4 * 60 * 1000; // un lobby waiting expire côté UI au bout de 4 min
 
 const listeners = {
   input: new Set(),
   snapshot: new Set(),
   gameOver: new Set(),
   opponentLeave: new Set(),
-  paired: new Set(),
+  lobbyUpdate: new Set(),     // changements de re_lobbies (guest joins, ready flags…)
+  start: new Set(),            // les 2 joueurs prêts → partie démarre
 };
 
 const state = {
   lobbyId: null,
-  role: null,           // "host" | "guest"
-  opponent: null,       // { id, username }
-  status: "idle",       // idle | waiting | playing | finished | abandoned
+  code: null,
+  role: null,                  // "host" | "guest"
+  opponent: null,              // { id, username }
+  status: "idle",              // idle | waiting | playing | finished | abandoned
+  hostReady: false,
+  guestReady: false,
   biome: "desert",
   difficulty: "normal",
   seed: 0,
   channel: null,
-  pgSub: null,          // subscription postgres_changes pour la salle d'attente
-  me: null,             // profil courant
+  pgSub: null,                 // postgres_changes sur la ligne re_lobbies courante
+  pollTimer: null,             // fallback poll DB
+  startFired: false,           // garde-fou pour ne pas démarrer 2x
+  me: null,                    // profil courant
 };
 
 function notify(key, payload) {
@@ -55,50 +58,151 @@ async function init() {
   return state.me;
 }
 
-async function joinOrCreate({ biome = "desert", difficulty = "normal" } = {}) {
-  await init();
-  if (!state.me) {
-    return { error: "not_authenticated" };
+function applyLobbyRow(row) {
+  if (!row) return;
+  const oldStatus = state.status;
+  state.lobbyId = row.id || state.lobbyId;
+  state.code = row.code || state.code;
+  state.status = row.status || state.status;
+  state.hostReady = !!row.host_ready;
+  state.guestReady = !!row.guest_ready;
+  if (row.seed != null) state.seed = Number(row.seed);
+  if (row.biome) state.biome = row.biome;
+  if (row.difficulty) state.difficulty = row.difficulty;
+
+  // Met à jour l'adversaire selon mon rôle
+  if (state.role === "host") {
+    state.opponent = row.guest_id
+      ? { id: row.guest_id, username: row.guest_username }
+      : null;
+  } else if (state.role === "guest") {
+    state.opponent = { id: row.host_id, username: row.host_username };
   }
 
-  const { data, error } = await supabase.rpc("re_join_or_create_lobby", {
+  notify("lobbyUpdate", {
+    status: state.status,
+    hostReady: state.hostReady,
+    guestReady: state.guestReady,
+    opponent: state.opponent,
+    code: state.code,
+  });
+
+  if (state.status === "playing" && !state.startFired) {
+    state.startFired = true;
+    notify("start", {
+      seed: state.seed,
+      biome: state.biome,
+      difficulty: state.difficulty,
+      opponent: state.opponent,
+    });
+  }
+  // Si le lobby a été abandonné (par exemple par l'autre joueur) et que je
+  // n'étais pas encore en jeu, j'informe l'UI pour qu'elle redirige.
+  if ((state.status === "abandoned" || state.status === "finished") && oldStatus !== state.status) {
+    notify("opponentLeave", { reason: state.status });
+  }
+}
+
+async function createLobby({ biome = "desert", difficulty = "normal" } = {}) {
+  await init();
+  if (!state.me) return { error: "not_authenticated" };
+
+  const { data, error } = await supabase.rpc("re_create_lobby", {
     p_biome: biome,
     p_difficulty: difficulty,
   });
   if (error) {
-    console.error("[RE_MP] join_or_create error", error);
+    console.error("[RE_MP] re_create_lobby", error);
     return { error: error.message || "rpc_failed" };
   }
   const row = Array.isArray(data) ? data[0] : data;
   if (!row) return { error: "no_lobby_returned" };
 
   state.lobbyId = row.lobby_id;
-  state.role = row.role;
+  state.code = row.code;
+  state.role = "host";
+  state.opponent = null;
+  state.status = "waiting";
+  state.hostReady = false;
+  state.guestReady = false;
+  state.startFired = false;
+  state.seed = Number(row.seed);
   state.biome = row.biome;
   state.difficulty = row.difficulty;
-  state.seed = Number(row.seed);
-  state.status = row.status;
-  state.opponent = (state.role === "host")
-    ? (row.guest_id ? { id: row.guest_id, username: row.guest_username } : null)
-    : { id: row.host_id, username: row.host_username };
 
   await setupChannel();
-
-  // Si on est host et le lobby est encore "waiting", on s'abonne aux changements
-  // postgres_changes pour être notifié quand un guest rejoint.
-  if (state.role === "host" && state.status === "waiting") {
-    subscribeLobbyRow();
-  }
+  subscribeLobbyRow();
 
   return {
     lobbyId: state.lobbyId,
-    role: state.role,
-    opponent: state.opponent,
-    seed: state.seed,
+    code: state.code,
+    role: "host",
     biome: state.biome,
     difficulty: state.difficulty,
+    seed: state.seed,
+  };
+}
+
+async function joinByCode(code) {
+  await init();
+  if (!state.me) return { error: "not_authenticated" };
+  if (!code || typeof code !== "string") return { error: "invalid_code" };
+
+  const { data, error } = await supabase.rpc("re_join_lobby_by_code", {
+    p_code: code.trim().toUpperCase(),
+  });
+  if (error) {
+    const msg = error.message || "rpc_failed";
+    return { error: msg };
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return { error: "lobby_not_found" };
+
+  state.lobbyId = row.lobby_id;
+  state.code = row.code;
+  state.role = "guest";
+  state.opponent = { id: row.host_id, username: row.host_username };
+  state.status = row.status || "waiting";
+  state.hostReady = !!row.host_ready;
+  state.guestReady = !!row.guest_ready;
+  state.startFired = state.status === "playing";
+  state.seed = Number(row.seed);
+  state.biome = row.biome;
+  state.difficulty = row.difficulty;
+
+  await setupChannel();
+  subscribeLobbyRow();
+
+  return {
+    lobbyId: state.lobbyId,
+    code: state.code,
+    role: "guest",
+    host_username: row.host_username,
+    biome: state.biome,
+    difficulty: state.difficulty,
+    seed: state.seed,
     status: state.status,
   };
+}
+
+async function setReady(ready) {
+  if (!state.lobbyId) return { error: "no_lobby" };
+  const { data, error } = await supabase.rpc("re_set_ready", {
+    p_lobby_id: state.lobbyId,
+    p_ready: !!ready,
+  });
+  if (error) {
+    console.error("[RE_MP] re_set_ready", error);
+    return { error: error.message || "rpc_failed" };
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  if (row) {
+    state.hostReady = !!row.host_ready;
+    state.guestReady = !!row.guest_ready;
+    if (row.status) state.status = row.status;
+    return { hostReady: state.hostReady, guestReady: state.guestReady, bothReady: !!row.both_ready, status: state.status };
+  }
+  return { hostReady: state.hostReady, guestReady: state.guestReady, bothReady: false };
 }
 
 async function setupChannel() {
@@ -119,17 +223,14 @@ async function setupChannel() {
   ch.on("broadcast", { event: "snapshot" }, ({ payload }) => notify("snapshot", payload));
   ch.on("broadcast", { event: "gameover" }, ({ payload }) => notify("gameOver", payload));
   ch.on("broadcast", { event: "hello" },    ({ payload }) => {
-    // Échange d'identité quand le peer rejoint le channel
+    // ping de présence : utile pour que le host sache que le guest est connecté
     if (state.role === "host" && payload?.from === "guest") {
-      // confirme le start
       ch.send({ type: "broadcast", event: "hello", payload: { from: "host", username: state.me?.username || null } });
     }
   });
-
   ch.on("presence", { event: "leave" }, ({ key }) => {
-    if (!state.opponent) return;
-    if (key === state.opponent.id) {
-      notify("opponentLeave", { id: key });
+    if (state.opponent && key === state.opponent.id) {
+      notify("opponentLeave", { id: key, reason: "presence_leave" });
     }
   });
 
@@ -148,51 +249,60 @@ async function setupChannel() {
   state.channel = ch;
 }
 
-// Souscrit aux changements de la ligne re_lobbies courante (host : attend un guest)
+// Souscrit aux changements de la ligne re_lobbies courante + poll fallback.
+// On déclenche `lobbyUpdate` à chaque update (pour rafraîchir l'UI ready/opponent)
+// et `start` quand status === 'playing'.
 function subscribeLobbyRow() {
   if (state.pgSub) {
     try { supabase.removeChannel(state.pgSub); } catch {}
     state.pgSub = null;
   }
+  if (state.pollTimer) {
+    clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+
   const sub = supabase.channel(`re-lobby-row-${state.lobbyId}`)
     .on("postgres_changes",
       { event: "UPDATE", schema: "public", table: "re_lobbies", filter: `id=eq.${state.lobbyId}` },
-      ({ new: row }) => {
-        if (!row) return;
-        if (row.status === "playing" && row.guest_id) {
-          state.status = "playing";
-          state.opponent = { id: row.guest_id, username: row.guest_username };
-          notify("paired", { opponent: state.opponent, seed: Number(row.seed), biome: row.biome, difficulty: row.difficulty });
-          // on n'a plus besoin de cette sub
-          try { supabase.removeChannel(sub); } catch {}
-          state.pgSub = null;
-        }
-      })
+      ({ new: row }) => applyLobbyRow(row))
     .subscribe();
   state.pgSub = sub;
+
+  // Fallback poll (toutes les 2 s) : tape la DB pour récupérer la ligne courante.
+  state.pollTimer = setInterval(async () => {
+    if (!state.lobbyId) return;
+    try {
+      const { data } = await supabase
+        .from("re_lobbies")
+        .select("id,code,status,host_id,guest_id,host_username,guest_username,seed,biome,difficulty,host_ready,guest_ready")
+        .eq("id", state.lobbyId)
+        .maybeSingle();
+      if (data) applyLobbyRow(data);
+      if (state.status === "playing" || state.status === "abandoned" || state.status === "finished") {
+        // dans tous ces cas on peut arrêter le poll
+        if (state.pollTimer && state.status !== "playing") {
+          clearInterval(state.pollTimer); state.pollTimer = null;
+        }
+      }
+    } catch {}
+  }, 2000);
 }
 
 async function leave() {
-  // Annule côté DB
   if (state.lobbyId && state.status !== "finished") {
-    try {
-      await supabase.rpc("re_cancel_lobby", { p_lobby_id: state.lobbyId });
-    } catch (err) {
-      console.warn("[RE_MP] cancel_lobby failed", err);
-    }
+    try { await supabase.rpc("re_cancel_lobby", { p_lobby_id: state.lobbyId }); }
+    catch (err) { console.warn("[RE_MP] cancel_lobby failed", err); }
   }
-  if (state.channel) {
-    try { await supabase.removeChannel(state.channel); } catch {}
-  }
-  if (state.pgSub) {
-    try { await supabase.removeChannel(state.pgSub); } catch {}
-  }
-  state.channel = null;
-  state.pgSub = null;
-  state.lobbyId = null;
-  state.role = null;
-  state.opponent = null;
-  state.status = "idle";
+  if (state.channel) { try { await supabase.removeChannel(state.channel); } catch {} }
+  if (state.pgSub)  { try { await supabase.removeChannel(state.pgSub); } catch {} }
+  if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+  Object.assign(state, {
+    channel: null, pgSub: null,
+    lobbyId: null, code: null, role: null,
+    opponent: null, status: "idle",
+    hostReady: false, guestReady: false, startFired: false,
+  });
 }
 
 function sendInput(action) {
@@ -214,9 +324,7 @@ async function reportFinish(winnerSide) {
   if (!state.lobbyId) return;
   try {
     await supabase.rpc("re_finish_lobby", { p_lobby_id: state.lobbyId, p_winner_side: winnerSide });
-  } catch (err) {
-    console.warn("[RE_MP] finish_lobby failed", err);
-  }
+  } catch (err) { console.warn("[RE_MP] finish_lobby failed", err); }
   state.status = "finished";
 }
 
@@ -225,7 +333,9 @@ function on(event, cb) { listeners[event]?.add(cb); return () => listeners[event
 const RE_MP = {
   state,
   init,
-  joinOrCreate,
+  createLobby,
+  joinByCode,
+  setReady,
   leave,
   sendInput,
   sendSnapshot,
@@ -235,8 +345,8 @@ const RE_MP = {
   onSnapshot:      (cb) => on("snapshot", cb),
   onGameOver:      (cb) => on("gameOver", cb),
   onOpponentLeave: (cb) => on("opponentLeave", cb),
-  onPaired:        (cb) => on("paired", cb),
-  SOFT_TIMEOUT_MS,
+  onLobbyUpdate:   (cb) => on("lobbyUpdate", cb),
+  onStart:         (cb) => on("start", cb),
 };
 
 window.RE_MP = RE_MP;
