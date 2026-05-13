@@ -16,7 +16,7 @@
 //   on{Input,Snapshot,GameOver,OpponentLeave,LobbyUpdate,Start}(cb) -> unsubscribe
 //   state                                   -> lecture seule
 
-import { supabase, getProfile, getCurrentSkin } from "/lib/supabase.js";
+import { supabase, getProfile, getCurrentSkin, getEquippedSkinTiers } from "/lib/supabase.js";
 
 const listeners = {
   input: new Set(),
@@ -60,6 +60,7 @@ async function init() {
   if (!session) return null;
   state.me = await getProfile();
   try { state.mySkin = await getCurrentSkin(); } catch { state.mySkin = null; }
+  try { state.myEquippedSkins = await getEquippedSkinTiers(); } catch { state.myEquippedSkins = {}; }
   return state.me;
 }
 
@@ -247,7 +248,12 @@ async function setupChannel() {
     // le skin du peer à son côté. Le host répond toujours au hello du guest pour
     // que le guest ait aussi le skin du host.
     if (payload?.from && payload.from !== state.role) {
-      notify("peerInfo", { username: payload.username, skin: payload.skin || null, from: payload.from });
+      notify("peerInfo", {
+        username: payload.username,
+        skin: payload.skin || null,
+        equippedSkins: payload.equippedSkins || {},
+        from: payload.from,
+      });
     }
     if (state.role === "host" && payload?.from === "guest") {
       ch.send({
@@ -256,6 +262,7 @@ async function setupChannel() {
           from: "host",
           username: state.me?.username || null,
           skin: state.mySkin ? { hex_color: state.mySkin.hex_color, hex_color_dark: state.mySkin.hex_color_dark } : null,
+          equippedSkins: state.myEquippedSkins || {},
         },
       });
     }
@@ -283,16 +290,17 @@ async function setupChannel() {
           clearTimeout(timeout);
           try { await ch.track({ user_id: state.me?.id, username: state.me?.username, role: state.role }); } catch {}
           const skinPayload = state.mySkin ? { hex_color: state.mySkin.hex_color, hex_color_dark: state.mySkin.hex_color_dark } : null;
+          const equippedPayload = state.myEquippedSkins || {};
           if (state.role === "guest") {
             ch.send({
               type: "broadcast", event: "hello",
-              payload: { from: "guest", username: state.me?.username || null, skin: skinPayload },
+              payload: { from: "guest", username: state.me?.username || null, skin: skinPayload, equippedSkins: equippedPayload },
             });
           }
           if (state.role === "spectator") {
             ch.send({
               type: "broadcast", event: "hello",
-              payload: { from: "spectator", username: state.me?.username || null, skin: skinPayload },
+              payload: { from: "spectator", username: state.me?.username || null, skin: skinPayload, equippedSkins: equippedPayload },
             });
           }
           finish();

@@ -283,6 +283,20 @@ const DIFFICULTY_PRESETS = {
     enemyBaseHP: 1000,
     aiDefenseChance: 0.25,
   },
+  wave: {
+    label: "Vagues",
+    emoji: "🌊",
+    desc: "Survis aux vagues escaladantes",
+    aiBuildInterval: 0,
+    aiStartMoney: 0,
+    aiHeavyChance: 0,
+    aiTypeWeights: { light: 1 },
+    playerStartMoney: 200,
+    playerBaseHP: 1500,
+    enemyBaseHP: 999999,
+    aiDefenseChance: 0,
+    isWave: true,
+  },
   hard: {
     label: "Difficile",
     emoji: "🔴",
@@ -594,12 +608,13 @@ const game = {
   ambientAnims: { active: [], nextSpawnAt: 0 },  // animations d'ambiance par biome
   attackFx: [],                    // legacy, conservé pour compat — vidé en pratique
   explosions: [],
+  damageNumbers: [],               // textes flottants -X / +X qui s'élèvent au-dessus des unités
   lightning: null,                // { x, y1, y2, age, ttl } pendant l'animation
   lightningCooldown: 0,           // secondes restantes avant la prochaine charge
   lightningAiming: false,         // true = curseur de visée actif, attend un clic sur la map
   stats: { player: makeStats(), enemy: makeStats() },
   gameOver: null,
-  camera: { x: 0 },
+  camera: { x: 0, shake: null },  // shake: { magnitude, ttl, age } pour les events critiques
   ui: {
     selectedBuildType: null,
     hoverSlot: null,
@@ -1287,6 +1302,9 @@ function tryPlaceFactory(side, slotIndex, typeId) {
     mode: "attack",
     tier: 1,                          // 1, 2 (1x2) ou 3 (2x2) — augmenté par la fusion
     spanSlots: [slotIndex],           // indices des slots couverts par cette factory
+    scale: 0.1,                        // pour anim scale-in à la pose
+    scaleAnim: { from: 0.1, to: 1, age: 0, ttl: 0.30 },
+    spawnPulse: null,
   };
   audio.playSFX("place");
   if (side === "player") tutorialOnAction("build_factory");
@@ -1445,8 +1463,16 @@ function sellFactory(side, slotIndex) {
   if (!slot.factory) return false;
   const refund = Math.floor(slot.factory.totalInvested * SELL_RATIO);
   state.money += refund;
-  // Libère tous les slots couverts par la fusion
+  // FX scale-out : burst de particules au centre de la factory + flash
   const span = slot.factory.spanSlots || [state.slots.indexOf(slot)];
+  const spanSlots = span.map((i) => state.slots[i]).filter(Boolean);
+  if (spanSlots.length) {
+    const bx = Math.min(...spanSlots.map((s) => s.x));
+    const by = Math.min(...spanSlots.map((s) => s.y));
+    const bw = Math.max(...spanSlots.map((s) => s.x + s.size)) - bx;
+    const bh = Math.max(...spanSlots.map((s) => s.y + s.size)) - by;
+    spawnDeathBurst(bx + bw / 2, by + bh / 2, side, Math.min(bw, bh) * 0.5);
+  }
   for (const idx of span) {
     const s = state.slots[idx];
     if (!s) continue;
@@ -1478,6 +1504,9 @@ function spawnUnitFromFactory(side, slot) {
   const gateRow = gateRowFor(slot.row);
   const gate = getGateCenter(side, gateRow);
   const stats = spawnStatsFor(factory);
+
+  // Pulse visuel sur la factory à chaque unité produite
+  factory.spawnPulse = 0;
 
   const spawnX = slot.x + slot.size / 2;
   const spawnY = slot.y + slot.size / 2;
@@ -1617,7 +1646,10 @@ function applyDamage(target, amount, attacker) {
   // amount < 0 = soin (médic). Clamp aux PV max.
   if (amount < 0) {
     const maxHp = target.maxHp || target.stats?.hp || target.hp;
+    const before = target.hp;
     target.hp = Math.min(maxHp, target.hp - amount);
+    const healed = target.hp - before;
+    if (healed > 0) spawnDamageNumber(target, healed, true);
     return;
   }
   target.hp -= amount;
@@ -1625,6 +1657,8 @@ function applyDamage(target, amount, attacker) {
     game.stats[attacker.side].damageDealt += amount;
     game.stats[target.side].damageTaken += amount;
   }
+  // Damage number floating au-dessus de la cible
+  if (amount > 0) spawnDamageNumber(target, amount, false);
   if (target.hp <= 0 && wasAlive) {
     if (attacker) {
       game[attacker.side].money += target.stats.killReward;
@@ -1632,8 +1666,269 @@ function applyDamage(target, amount, attacker) {
       game.stats[target.side].unitsLost++;
     }
     audio.playSFX("death");
+    // Burst supplémentaire à la mort (au-delà de l'explosion classique)
+    spawnDeathBurst(target.x, target.y, target.side, target.stats?.radius || 8);
+    // Shake léger pour les grosses unités qui crèvent
+    if ((target.stats?.hp || 0) >= 80) triggerCameraShake(0.4, 0.15);
   }
 }
+
+function spawnDamageNumber(target, value, isHeal) {
+  if (!Number.isFinite(value) || value <= 0) return;
+  game.damageNumbers.push({
+    x: target.x + (Math.random() - 0.5) * 10,
+    y: target.y - (target.stats?.radius || 8) - 4,
+    vx: (Math.random() - 0.5) * 18,
+    vy: -52 - Math.random() * 14,
+    value: Math.round(value),
+    isHeal: !!isHeal,
+    side: target.side,
+    age: 0,
+    ttl: 0.95,
+  });
+  // Cap pour éviter de stocker à l'infini lors de gros affrontements
+  if (game.damageNumbers.length > 80) game.damageNumbers.splice(0, game.damageNumbers.length - 80);
+}
+
+function updateDamageNumbers(dt) {
+  for (const d of game.damageNumbers) {
+    d.age += dt;
+    d.x += d.vx * dt;
+    d.y += d.vy * dt;
+    d.vy += 64 * dt; // gravité : les chiffres ralentissent puis retombent
+  }
+  // Cleanup : retirer ceux qui ont fini leur ttl
+  game.damageNumbers = game.damageNumbers.filter((d) => d.age < d.ttl);
+}
+
+function drawDamageNumbers(ctx) {
+  for (const d of game.damageNumbers) {
+    const t = d.age / d.ttl;
+    const alpha = (1 - t).toFixed(3);
+    const size = 14 + (d.isHeal ? 1 : Math.min(6, d.value / 12));
+    ctx.font = `bold ${Math.round(size)}px -apple-system, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const baseColor = d.isHeal ? "74,222,128" : (d.side === "player" ? "254,202,202" : "191,219,254");
+    // Liseré noir pour la lisibilité
+    ctx.strokeStyle = `rgba(0,0,0,${(0.55 * (1 - t)).toFixed(3)})`;
+    ctx.lineWidth = 3;
+    const txt = d.isHeal ? `+${d.value}` : `−${d.value}`;
+    ctx.strokeText(txt, d.x, d.y);
+    ctx.fillStyle = `rgba(${baseColor},${alpha})`;
+    ctx.fillText(txt, d.x, d.y);
+  }
+}
+
+// Particules au moment de la mort d'une unité — petite gerbe de débris en
+// plus de l'explosion principale (gérée par spawnExplosion / drawExplosions).
+function spawnDeathBurst(x, y, side, radius) {
+  if (!game.flashes) game.flashes = [];
+  const n = 6 + Math.min(8, Math.floor(radius / 3));
+  for (let i = 0; i < n; i++) {
+    const angle = (Math.PI * 2 * i) / n + Math.random() * 0.4;
+    const speed = 60 + Math.random() * 80;
+    game.flashes.push({
+      kind: "debris",
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 30,
+      age: 0,
+      ttl: 0.55 + Math.random() * 0.25,
+      side,
+      size: 2 + Math.random() * 2.5,
+    });
+  }
+}
+
+function triggerCameraShake(magnitude, ttl) {
+  const cur = game.camera.shake;
+  if (!cur || magnitude > cur.magnitude * (1 - cur.age / cur.ttl)) {
+    game.camera.shake = { magnitude, ttl, age: 0 };
+  }
+}
+
+function updateCameraShake(dt) {
+  if (!game.camera.shake) return;
+  game.camera.shake.age += dt;
+  if (game.camera.shake.age >= game.camera.shake.ttl) game.camera.shake = null;
+}
+
+// ── MODE VAGUES ─────────────────────────────────────────────────────────
+// Spawn périodique d'unités ennemies de plus en plus fortes. Pas de
+// factory côté ennemi : les unités apparaissent directement à droite,
+// au niveau d'une porte aléatoire. La partie se termine quand la base
+// du joueur tombe ; on track game.wave.defeated = nb de vagues clear.
+function buildWaveQueue(waveNum) {
+  const queue = [];
+  const total = 3 + Math.floor(waveNum * 1.6);
+  for (let i = 0; i < total; i++) {
+    const r = Math.random();
+    let typeId;
+    if (waveNum < 3) {
+      typeId = r < 0.7 ? "light" : "swarmer";
+    } else if (waveNum < 6) {
+      typeId = r < 0.40 ? "light" : r < 0.65 ? "swarmer" : r < 0.88 ? "heavy" : "sniper";
+    } else if (waveNum < 10) {
+      typeId = r < 0.25 ? "light" : r < 0.45 ? "swarmer" : r < 0.65 ? "heavy" : r < 0.85 ? "sniper" : "air";
+    } else {
+      typeId = r < 0.18 ? "light" : r < 0.36 ? "swarmer" : r < 0.55 ? "heavy" : r < 0.78 ? "sniper" : "air";
+    }
+    queue.push(typeId);
+  }
+  return queue;
+}
+
+function spawnWaveUnit(typeId, waveNum) {
+  const ut = UNIT_TYPES[typeId];
+  if (!ut) return;
+  // Scaling de stats : +8% HP/dmg par vague (cumulé)
+  const sm = 1 + (waveNum - 1) * 0.08;
+  const stats = {
+    hp: ut.hp * sm,
+    damage: ut.damage * sm,
+    speed: ut.speed,
+    range: ut.range,
+    radius: ut.radius,
+    attackInterval: ut.attackInterval,
+    killReward: Math.round((ut.killReward || 5) * (0.8 + waveNum * 0.05)),
+    layer: ut.layer || "ground",
+    canTargetAir: !!ut.canTargetAir,
+  };
+  const gateRows = CONFIG.PATH_ROWS;
+  const gateRow = gateRows[Math.floor(Math.random() * gateRows.length)];
+  const gate = getGateCenter("enemy", gateRow);
+  const isAir = stats.layer === "air";
+  game.units.push({
+    side: "enemy",
+    typeId,
+    kind: "unit",
+    x: gate.x,
+    y: gate.y,
+    gateY: gate.y,
+    hp: stats.hp,
+    maxHp: stats.hp,
+    stats,
+    target: null,
+    attackCooldown: 0,
+    wanderY: null,
+    wanderTimer: 0,
+    mode: "attack",
+    exitWaypoints: [],
+    stationary: false,
+  });
+  game.stats.enemy.unitsSpawned++;
+}
+
+function updateWaveSpawning(dt) {
+  const w = game.wave;
+  if (!w?.active) return;
+  if (!w.inWave) {
+    w.betweenWaves -= dt;
+    if (w.betweenWaves <= 0) {
+      w.queue = buildWaveQueue(w.current);
+      w.inWave = true;
+      w.spawnTimer = 0;
+      w.spawnInterval = Math.max(0.35, 1.0 - w.current * 0.04);
+    }
+    return;
+  }
+  if (w.queue.length > 0) {
+    w.spawnTimer += dt;
+    if (w.spawnTimer >= w.spawnInterval) {
+      w.spawnTimer = 0;
+      const t = w.queue.shift();
+      spawnWaveUnit(t, w.current);
+    }
+    return;
+  }
+  // Attente que tous les ennemis de la vague soient morts
+  const enemiesAlive = game.units.some((u) => u.side === "enemy" && u.hp > 0 && !u.stationary);
+  if (!enemiesAlive) {
+    w.defeated = w.current;
+    // Bonus monnaie + petit shake fêter la vague
+    const bonus = 60 + w.current * 12;
+    game.player.money += bonus;
+    spawnDamageNumber({ x: 200, y: CONFIG.HUD_H + 60, side: "player", stats: { radius: 0 } }, bonus, true);
+    triggerCameraShake(0.6, 0.25);
+    w.current++;
+    w.inWave = false;
+    w.betweenWaves = 5;
+  }
+}
+
+// Petit overlay haut-centre pour le mode Vagues : numéro de vague,
+// statut (en cours / breather), countdown si pause entre vagues.
+function drawWaveOverlay(ctx) {
+  const w = game.wave;
+  if (!w?.active) return;
+  const cx = CONFIG.CANVAS_W / 2;
+  const y = CONFIG.HUD_H + 6;
+  const W = 220, H = 50;
+  const x = cx - W / 2;
+  ctx.save();
+  ctx.fillStyle = "rgba(168, 85, 247, 0.20)";
+  roundedRect(ctx, x, y, W, H, 12);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(168, 85, 247, 0.65)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 18px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`🌊 Vague ${w.current}`, cx, y + 18);
+
+  ctx.font = "11px -apple-system, sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.75)";
+  if (w.inWave) {
+    if (w.queue.length > 0) {
+      ctx.fillText(`Spawning… ${w.queue.length} restantes`, cx, y + 36);
+    } else {
+      const aliveCount = game.units.filter((u) => u.side === "enemy" && u.hp > 0 && !u.stationary).length;
+      ctx.fillText(`Élimine les ${aliveCount} ennemis restants`, cx, y + 36);
+    }
+  } else {
+    const sec = Math.max(0, Math.ceil(w.betweenWaves));
+    ctx.fillText(`Prochaine vague dans ${sec}s — vagues clear : ${w.defeated}`, cx, y + 36);
+  }
+  ctx.restore();
+}
+
+function currentShakeOffset() {
+  const s = game.camera.shake;
+  if (!s) return { x: 0, y: 0 };
+  const decay = 1 - s.age / s.ttl;
+  const mag = s.magnitude * decay * 14;
+  return { x: (Math.random() - 0.5) * mag, y: (Math.random() - 0.5) * mag * 0.7 };
+}
+
+// Met à jour les animations attachées aux factories (scale-in à la pose,
+// pulse à chaque spawn d'unité).
+function updateFactoryAnims(dt) {
+  for (const side of ["player", "enemy"]) {
+    const s = game[side];
+    if (!s?.slots) continue;
+    for (const slot of s.slots) {
+      const f = slot.factory;
+      if (!f) continue;
+      if (f.scaleAnim) {
+        f.scaleAnim.age += dt;
+        const t = Math.min(1, f.scaleAnim.age / f.scaleAnim.ttl);
+        // Ease-out elastic léger pour un pop juicy
+        const eased = 1 - Math.pow(1 - t, 3);
+        f.scale = f.scaleAnim.from + (f.scaleAnim.to - f.scaleAnim.from) * eased;
+        if (t >= 1) f.scaleAnim = null;
+      }
+      if (f.spawnPulse != null) {
+        f.spawnPulse += dt;
+        if (f.spawnPulse > 0.4) f.spawnPulse = null;
+      }
+    }
+  }
+}
+
 
 // FX visuel du soin : petite traînée verte du médic vers la cible + halo
 // circulaire au point d'arrivée. On réutilise game.flashes (structure unifiée
@@ -1785,7 +2080,11 @@ function updateUnits(dt) {
       game[targetSide].baseHP = Math.max(0, game[targetSide].baseHP - BORDER_HIT_DAMAGE);
       game.stats[u.side].borderHits++;
       spawnExplosion(u.x, u.y, u.side);
+      spawnDeathBurst(u.x, u.y, u.side, (u.stats?.radius || 8) + 4);
       audio.playSFX("crash");
+      // Shake léger pour chaque coup à la base ; gros shake si la base est presque morte
+      const remaining = game[targetSide].baseHP / Math.max(1, game[targetSide].baseHPMax);
+      triggerCameraShake(remaining < 0.2 ? 1.0 : 0.5, 0.20);
       u.hp = 0;
     }
   }
@@ -1846,18 +2145,32 @@ function updateAttackFx(dt) {
 function checkGameOver() {
   if (game.gameOver) return;
   if (game.player.baseHP <= 0) {
-    game.gameOver = { winner: "enemy" };
-    audio.playSFX(mySide() === "enemy" ? "win" : "lose");
+    game.gameOver = { winner: "enemy", wavesCleared: game.wave?.defeated || 0 };
+    audio.playSFX("lose");
     audio.stopMusic();
     audio.stopAmbient();
-    notifyGameOver("enemy");
-  } else if (game.enemy.baseHP <= 0) {
+    triggerCameraShake(2.5, 0.6);
+    if (game.wave?.active) recordWaveRun(game.wave.defeated || 0);
+    else notifyGameOver("enemy");
+  } else if (game.enemy.baseHP <= 0 && !game.wave?.active) {
     game.gameOver = { winner: "player" };
     audio.playSFX(mySide() === "player" ? "win" : "lose");
     audio.stopMusic();
     audio.stopAmbient();
     notifyGameOver("player");
   }
+}
+
+async function recordWaveRun(waves) {
+  if (!window.RE_AUTH || !window.RE_AUTH.session) return;
+  try {
+    const { supabase } = await import("/lib/supabase.js");
+    const { data, error } = await supabase.rpc("re_record_wave_run", { p_waves: waves });
+    if (!error && data?.[0]) {
+      game.gameOver.bestWave = data[0].best_wave;
+      game.gameOver.wasRecord = data[0].was_record;
+    }
+  } catch (err) { console.warn("[wave] record run", err); }
 }
 
 // Notifie le backend (solo) ou diffuse en MP (host) la fin de partie.
@@ -2107,6 +2420,9 @@ function update(dt) {
     // On laisse juste tourner la caméra et la mise à jour de la souris,
     // les structures (units, factories, etc.) sont écrasées par les snapshots reçus.
     updateCamera(dt);
+    updateDamageNumbers(dt);
+    updateCameraShake(dt);
+    updateFactoryAnims(dt);
     game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
     game.ui.mouse.y = game.ui.mouseScreen.y;
     return;
@@ -2116,6 +2432,7 @@ function update(dt) {
   updateLightning(dt);
   // En MP host, on désactive le bot : c'est le guest qui joue le côté enemy.
   if (game.mode !== "mp") updateEnemyAI(dt);
+  if (game.wave?.active && typeof updateWaveSpawning === "function") updateWaveSpawning(dt);
   updateFactories(dt);
   updateUnits(dt);
   resolvePropCollisions();
@@ -2124,6 +2441,9 @@ function update(dt) {
   updateFlashes(dt);
   updateAmbientAnims(dt);
   updateExplosions(dt);
+  updateDamageNumbers(dt);
+  updateCameraShake(dt);
+  updateFactoryAnims(dt);
   checkGameOver();
   game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
   game.ui.mouse.y = game.ui.mouseScreen.y;
@@ -2185,6 +2505,7 @@ function fireIem(side) {
   game.stats.player.unitsKilled += killsByPlayer;
   game.stats.enemy.unitsKilled += killsByEnemy;
   audio.playSFX("lightning");
+  triggerCameraShake(2.0, 0.50);
   return true;
 }
 
@@ -2251,6 +2572,7 @@ function fireLightningAt(targetX, side = "player") {
   game.stats.enemy.unitsKilled += killsByEnemy;
   game.stats[side].lightningsUsed++;
   audio.playSFX("lightning");
+  triggerCameraShake(1.2, 0.30);
   if (side === "player") tutorialOnAction("lightning");
   return true;
 }
@@ -2307,9 +2629,10 @@ function render(ctx) {
     return;
   }
 
-  // Monde (avec décalage caméra)
+  // Monde (avec décalage caméra + shake éventuel)
+  const shake = currentShakeOffset();
   ctx.save();
-  ctx.translate(-game.camera.x, 0);
+  ctx.translate(-game.camera.x + shake.x, shake.y);
   drawGround(ctx);
   drawBattlefieldLane(ctx);
   drawAmbientAnims(ctx);   // sous les props et unités, au-dessus du sol
@@ -2326,7 +2649,11 @@ function render(ctx) {
   drawHoverRange(ctx);
   drawLightning(ctx);
   drawLightningAim(ctx);
+  drawDamageNumbers(ctx);   // dans le repère monde, juste au-dessus des unités
   ctx.restore();
+
+  // Overlay Vague (par-dessus le monde)
+  if (game.wave?.active) drawWaveOverlay(ctx);
 
   // UI (coordonnées écran)
   drawHUD(ctx);
@@ -2576,7 +2903,35 @@ function drawSlots(ctx, side) {
     ctx.setLineDash([]);
 
     if (slot.factory) {
-      drawFactory(ctx, slot, side);
+      const f = slot.factory;
+      // Scale anim au build : on transforme autour du centre de la factory
+      const scale = (typeof f.scale === "number" && f.scale > 0) ? f.scale : 1;
+      // Pulse au spawn d'une unité : petit overshoot 1 → 1.10 → 1.0
+      let pulseMul = 1;
+      if (f.spawnPulse != null) {
+        const p = Math.min(1, f.spawnPulse / 0.35);
+        pulseMul = 1 + 0.10 * Math.sin(p * Math.PI);
+      }
+      const finalScale = scale * pulseMul;
+      if (finalScale !== 1) {
+        ctx.save();
+        const span = (f.spanSlots || []).map((i) => game[side].slots[i]).filter(Boolean);
+        let bx = slot.x, by = slot.y, bw = slot.size, bh = slot.size;
+        if (span.length > 1) {
+          bx = Math.min(...span.map((s) => s.x));
+          by = Math.min(...span.map((s) => s.y));
+          bw = Math.max(...span.map((s) => s.x + s.size)) - bx;
+          bh = Math.max(...span.map((s) => s.y + s.size)) - by;
+        }
+        const cx = bx + bw / 2, cy = by + bh / 2;
+        ctx.translate(cx, cy);
+        ctx.scale(finalScale, finalScale);
+        ctx.translate(-cx, -cy);
+        drawFactory(ctx, slot, side);
+        ctx.restore();
+      } else {
+        drawFactory(ctx, slot, side);
+      }
     }
   });
 
@@ -3059,12 +3414,30 @@ function drawHoverRange(ctx) {
 // Tomb sur unit-{type}-{side}.png par défaut si pas de skin ou sprite manquant.
 function unitSpriteNameFor(u) {
   const baseName = `unit-${u.typeId}-${u.side}`;
-  // Skins par unité : appliqués uniquement côté player (le user achète pour lui)
-  if (u.side !== "player") return baseName;
-  const tier = window.RE_AUTH?.equippedSkins?.[u.typeId];
+  // Le skin par unité est propre à chaque compte. Il faut donc savoir
+  // quel skin appliquer à QUI.
+  // - Solo : seul le côté "player" (= moi) a un skin équipé.
+  // - MP host : "player" = moi (mes skins), "enemy" = guest (ses skins reçus).
+  // - MP guest : "enemy" = moi (mes skins), "player" = host (ses skins reçus).
+  // - Spectator : on n'applique aucun skin perso (on regarde, pas la peine).
+  let tier = null;
+  const myEquipped = window.RE_AUTH?.equippedSkins || {};
+  const peerEquipped = game.mp?.peerEquippedSkins || {};
+  if (game.mode === "mp") {
+    if (game.mp?.role === "host") {
+      if (u.side === "player") tier = myEquipped[u.typeId];
+      else if (u.side === "enemy") tier = peerEquipped[u.typeId];
+    } else if (game.mp?.role === "guest") {
+      if (u.side === "enemy") tier = myEquipped[u.typeId];
+      else if (u.side === "player") tier = peerEquipped[u.typeId];
+    }
+    // Spectateur : pas de skin appliqué (on n'a pas l'équipement des deux peers)
+  } else {
+    // Solo : seul mon côté "player" a un skin
+    if (u.side === "player") tier = myEquipped[u.typeId];
+  }
   if (!tier) return baseName;
   const tieredName = `${baseName}-t${tier}`;
-  // Fallback si le sprite tieré n'est pas chargé
   return sprites[tieredName] ? tieredName : baseName;
 }
 
@@ -3355,7 +3728,15 @@ function updateProjectiles(dt) {
 }
 
 function updateFlashes(dt) {
-  for (const f of game.flashes) f.age += dt;
+  for (const f of game.flashes) {
+    f.age += dt;
+    // Les debris bougent avec une petite gravité
+    if (f.kind === "debris") {
+      f.x += (f.vx || 0) * dt;
+      f.y += (f.vy || 0) * dt;
+      f.vy = (f.vy || 0) + 220 * dt;
+    }
+  }
   game.flashes = game.flashes.filter((f) => f.age < f.ttl);
 }
 
@@ -3437,6 +3818,18 @@ function drawFlashes(ctx) {
       ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
       ctx.beginPath();
       ctx.arc(f.x, f.y, r * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (f.kind === "debris") {
+      // Petites particules de débris lors d'une mort
+      const fadeOut = Math.max(0, 1 - t);
+      ctx.save();
+      const c = f.side === "player" ? "147, 197, 253" : "252, 165, 165";
+      ctx.fillStyle = `rgba(${c}, ${fadeOut.toFixed(3)})`;
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = `rgba(${c}, ${(fadeOut * 0.6).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.size, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     } else if (f.kind === "heal") {
@@ -4377,9 +4770,9 @@ function drawExplosions(ctx) {
 // -------------------------------------------------------------
 function drawGameOverReport(ctx) {
   const PW = 620;
-  const PH = 440;
+  const PH = 380;
   const px = (CONFIG.CANVAS_W - PW) / 2;
-  const py = 160;
+  const py = 234;  // descend pour laisser la place aux cards récompenses
 
   // Panneau glassmorphique
   drawGlass(ctx, px, py, PW, PH, { radius: 20, tint: "rgba(15, 18, 32, 0.78)", border: "rgba(255,255,255,0.22)" });
@@ -4625,11 +5018,11 @@ function drawMenu(ctx) {
   ctx.textBaseline = "alphabetic";
   ctx.fillText("DIFFICULTÉ", cx, 226);
 
-  const diffBtnW = 180, diffBtnH = 72, diffGap = 14;
-  const diffTotalW = 3 * diffBtnW + 2 * diffGap;
+  const diffBtnW = 140, diffBtnH = 72, diffGap = 12;
+  const diffTotalW = 4 * diffBtnW + 3 * diffGap;
   const diffStartX = cx - diffTotalW / 2;
   const diffY = 240;
-  const diffOrder = ["easy", "normal", "hard"];
+  const diffOrder = ["easy", "normal", "hard", "wave"];
   const diffRects = [];
 
   for (const [i, key] of diffOrder.entries()) {
@@ -4638,18 +5031,19 @@ function drawMenu(ctx) {
     diffRects.push({ rect, key });
     const isActive = game.difficulty === key;
     const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
-    if (isActive) drawGlassAccent(ctx, rect.x, rect.y, rect.w, rect.h, "#5b8cff", { radius: 14 });
+    const accent = key === "wave" ? "#a855f7" : "#5b8cff";
+    if (isActive) drawGlassAccent(ctx, rect.x, rect.y, rect.w, rect.h, accent, { radius: 14 });
     else drawGlass(ctx, rect.x, rect.y, rect.w, rect.h, { radius: 14, tint: isHover ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.05)" });
 
     ctx.fillStyle = "#fff";
-    ctx.font = "bold 20px -apple-system, sans-serif";
+    ctx.font = "bold 17px -apple-system, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(`${preset.emoji} ${preset.label}`, rect.x + rect.w / 2, rect.y + 26);
+    ctx.fillText(`${preset.emoji} ${preset.label}`, rect.x + rect.w / 2, rect.y + 24);
 
     ctx.fillStyle = "rgba(240, 244, 255, 0.65)";
-    ctx.font = "11px -apple-system, sans-serif";
-    wrapText(ctx, preset.desc, rect.x + rect.w / 2, rect.y + 50, rect.w - 16, 13);
+    ctx.font = "10px -apple-system, sans-serif";
+    wrapText(ctx, preset.desc, rect.x + rect.w / 2, rect.y + 46, rect.w - 14, 12);
   }
 
   // ── BIOME ──
@@ -4856,6 +5250,67 @@ function wrapText(ctx, text, x, y, maxW, lineH) {
   if (line) ctx.fillText(line, x, yy);
 }
 
+// Bandeau récompenses sous le titre du game over : monnaie gagnée, ELO,
+// vague atteinte. Trois cards glass aérées au lieu d'une longue ligne dense.
+function drawGameOverRewards(ctx) {
+  const isWave = !!game.wave?.active;
+  const isMp = game.mode === "mp";
+  const cards = [];
+  if (game.gameOver.reward != null) {
+    cards.push({
+      icon: "💰",
+      label: "Monnaie",
+      value: `+${game.gameOver.reward}`,
+      sub: window.RE_AUTH?.profile ? `Solde : ${window.RE_AUTH.profile.currency}` : "—",
+      color: "#fbbf24",
+    });
+  }
+  if (isMp && typeof game.gameOver.eloDelta === "number" && game.gameOver.eloDelta !== 0) {
+    const d = game.gameOver.eloDelta;
+    const sign = d > 0 ? "+" : "";
+    cards.push({
+      icon: "🏆",
+      label: "ELO",
+      value: `${sign}${d}`,
+      sub: d > 0 ? "Tu progresses !" : "À la prochaine !",
+      color: d > 0 ? "#4ade80" : "#ff5b6e",
+    });
+  }
+  if (isWave) {
+    const w = game.gameOver.wavesCleared || 0;
+    cards.push({
+      icon: "🌊",
+      label: "Vagues",
+      value: `${w}`,
+      sub: game.gameOver.wasRecord ? "🏅 Nouveau record" : (game.gameOver.bestWave != null ? `Record : ${game.gameOver.bestWave}` : ""),
+      color: "#a855f7",
+    });
+  }
+  if (cards.length === 0) return;
+  const cardW = 200, cardH = 70, gap = 16;
+  const totalW = cardW * cards.length + gap * (cards.length - 1);
+  const startX = (CONFIG.CANVAS_W - totalW) / 2;
+  const y = 154;
+  for (let i = 0; i < cards.length; i++) {
+    const c = cards[i];
+    const x = startX + i * (cardW + gap);
+    drawGlassAccent(ctx, x, y, cardW, cardH, c.color, { radius: 14 });
+    ctx.fillStyle = "rgba(255,255,255,0.78)";
+    ctx.font = "bold 11px -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(`${c.icon}  ${c.label.toUpperCase()}`, x + 14, y + 18);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 26px -apple-system, sans-serif";
+    ctx.fillText(c.value, x + 14, y + 44);
+    if (c.sub) {
+      ctx.fillStyle = "rgba(255,255,255,0.65)";
+      ctx.font = "10px -apple-system, sans-serif";
+      ctx.fillText(c.sub, x + 14, y + 60);
+    }
+  }
+}
+
 function drawGameOverOverlay(ctx) {
   // Voile assombrissant + nappes lumineuses pour un fond glassmorphique
   ctx.fillStyle = "rgba(7, 9, 26, 0.78)";
@@ -4868,18 +5323,28 @@ function drawGameOverOverlay(ctx) {
   ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
 
   const isSpec = game.mode === "mp" && game.mp?.role === "spectator";
+  const isWave = !!game.wave?.active;
   const winnerSide = game.gameOver.winner;
-  const win = !isSpec && winnerSide === mySide();
-  let title, subtitle;
-  if (isSpec) {
+  const win = !isSpec && !isWave && winnerSide === mySide();
+  let title, subtitle, titleColor;
+  if (isWave) {
+    const w = game.gameOver.wavesCleared || 0;
+    title = "VAGUES";
+    subtitle = `Tu as survécu à ${w} vague${w > 1 ? "s" : ""}.`;
+    titleColor = "#a855f7";
+    if (game.gameOver.wasRecord) subtitle += "  ·  🏅 Nouveau record perso !";
+    else if (game.gameOver.bestWave != null) subtitle += `  ·  Record perso : ${game.gameOver.bestWave}`;
+  } else if (isSpec) {
     const winnerName = winnerSide === "player"
       ? (game.mp?.hostUsername  || "Hôte")
       : (game.mp?.guestUsername || "Invité");
     title = "FIN DE PARTIE";
     subtitle = `${winnerName} a remporté la partie.`;
+    titleColor = COLORS.hudText;
   } else {
     title = win ? "VICTOIRE !" : "DÉFAITE";
     subtitle = win ? "La base adverse est tombée." : "Ta base a été détruite.";
+    titleColor = win ? COLORS.hpGood : COLORS.enemy;
   }
   if (game.gameOver.reason === "opponent_left") {
     subtitle = "L'adversaire a quitté la partie.";
@@ -4888,27 +5353,22 @@ function drawGameOverOverlay(ctx) {
       ? "L'adversaire a abandonné."
       : "Tu as abandonné la partie.";
   }
-  // Récompense Supabase si dispo
-  if (!isSpec && game.gameOver.reward != null) {
-    subtitle += `  · +${game.gameOver.reward} 💰 ajoutés à ton solde`;
-    if (game.mode === "mp" && typeof game.gameOver.eloDelta === "number" && game.gameOver.eloDelta !== 0) {
-      const delta = game.gameOver.eloDelta;
-      const sign = delta > 0 ? "+" : "";
-      subtitle += `  ·  ELO ${sign}${delta}`;
-    }
-  } else if (!isSpec && !window.RE_AUTH?.session) {
-    subtitle += "  · (invité — aucune monnaie attribuée)";
-  }
 
-  ctx.fillStyle = win ? COLORS.hpGood : COLORS.enemy;
+  ctx.fillStyle = titleColor;
   ctx.font = "bold 52px -apple-system, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(title, CONFIG.CANVAS_W / 2, 90);
+  ctx.shadowColor = titleColor;
+  ctx.shadowBlur = 24;
+  ctx.fillText(title, CONFIG.CANVAS_W / 2, 88);
+  ctx.shadowBlur = 0;
 
   ctx.fillStyle = COLORS.hudText;
-  ctx.font = "16px -apple-system, sans-serif";
-  ctx.fillText(subtitle, CONFIG.CANVAS_W / 2, 130);
+  ctx.font = "15px -apple-system, sans-serif";
+  ctx.fillText(subtitle, CONFIG.CANVAS_W / 2, 124);
+
+  // Bandeau récompenses : ELO / monnaie / wave bonus, en cards glassy
+  if (!isSpec) drawGameOverRewards(ctx);
 
   // Rapport de partie
   drawGameOverReport(ctx);
@@ -6788,6 +7248,21 @@ function startGame(difficulty) {
     game.mp = null;
   }
   game.mode = "solo";
+  // Mode Vagues : initialise un état dédié et désactive l'IA d'usine
+  if (game.preset?.isWave) {
+    game.wave = {
+      active: true,
+      current: 1,
+      defeated: 0,
+      queue: [],
+      spawnTimer: 0,
+      spawnInterval: 1.0,
+      betweenWaves: 4,    // 4s avant la 1ère vague
+      inWave: false,
+    };
+  } else {
+    game.wave = null;
+  }
   applyTeamSkin(); // applique le skin courant aux COLORS.player avant resetGame
   resetGame();
   game.screen = "playing";
@@ -6872,9 +7347,13 @@ function startMultiplayer() {
     window.RE_MP.onChat(handleMpChat);
     window.RE_MP.onEmote(handleMpEmote);
     window.RE_MP.onRematch(handleMpRematch);
-    window.RE_MP.onPeerInfo(({ skin, username, from }) => {
+    window.RE_MP.onPeerInfo(({ skin, username, equippedSkins, from }) => {
       if (skin) applyPeerSkin(skin);
-      // Met aussi à jour le username affiché en MP (host/guest)
+      // Stocke les skins équipés du peer pour que unitSpriteNameFor puisse
+      // appliquer les bons sprites à ses unités côté oppSide().
+      if (game.mp && equippedSkins) {
+        game.mp.peerEquippedSkins = equippedSkins;
+      }
       if (game.mp && username) {
         if (from === "host") game.mp.hostUsername = username;
         if (from === "guest") game.mp.guestUsername = username;
