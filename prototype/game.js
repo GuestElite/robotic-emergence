@@ -514,13 +514,22 @@ const audio = {
   // ── Menu music (Ride The Wind, joué UNIQUEMENT sur l'écran menu)
   // Séparé de la BGM in-game pour pouvoir basculer proprement entre les 2
   // sans jamais les superposer.
+  preloadMenuMusic() {
+    // Crée l'Audio element très tôt (au boot) avec preload="auto" pour que
+    // le téléchargement (10 MB) se fasse en arrière-plan. Au premier clic
+    // utilisateur, play() sera instantané puisque le buffer sera déjà rempli.
+    if (this.menuMusic) return;
+    this.menuMusic = new Audio("../11-sound-design/music/bgm-menu.mp3");
+    this.menuMusic.loop = true;
+    this.menuMusic.preload = "auto";
+    this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
+    try { this.menuMusic.load(); } catch (_) {}
+  },
   startMenuMusic() {
     if (!this.musicEnabled) return;
     if (this.menuMusic && !this.menuMusic.paused) return;
-    if (!this.menuMusic) {
-      this.menuMusic = new Audio("../11-sound-design/music/bgm-menu.mp3");
-      this.menuMusic.loop = true;
-    }
+    // Si pas encore préchargée, on la crée ici (fallback)
+    if (!this.menuMusic) this.preloadMenuMusic();
     this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
     this.menuMusic.play().catch(() => { /* autoplay bloqué — réessaie au prochain clic */ });
   },
@@ -816,6 +825,12 @@ const SPRITE_FILES = [
   "unit-sniper-enemy",
   "unit-air-player",
   "unit-air-enemy",
+  // Médic : factory + 4 frames d'animation par camp
+  "factory-medic-player", "factory-medic-enemy",
+  "unit-medic-player-0", "unit-medic-player-1",
+  "unit-medic-player-2", "unit-medic-player-3",
+  "unit-medic-enemy-0", "unit-medic-enemy-1",
+  "unit-medic-enemy-2", "unit-medic-enemy-3",
   // === Skins boutique : tier 1 (Rare) + tier 2 (Epic), player + enemy ===
   // Player skins (mêmes sprites tous biomes — le player garde sa famille bleue)
   "unit-light-player-t1", "unit-light-player-t2",
@@ -3783,6 +3798,17 @@ function drawHoverRange(ctx) {
 // équipé par le joueur (T1/T2 — sprite avec ajouts physiques baked-in).
 // Tomb sur unit-{type}-{side}.png par défaut si pas de skin ou sprite manquant.
 function unitSpriteNameFor(u) {
+  // Médic : 4 frames d'animation cyclées (~10 fps) tant que l'unité bouge.
+  // Quand statique (en mode défense rallié, ou aucun déplacement entre 2 frames),
+  // on revient à la frame 0 (pose neutre) pour éviter le "court sur place".
+  if (u.typeId === "medic") {
+    const moved = u._prevX != null &&
+                  (Math.abs(u.x - u._prevX) > 0.05 || Math.abs(u.y - u._prevY) > 0.05);
+    u._prevX = u.x;
+    u._prevY = u.y;
+    const frameIdx = moved ? Math.floor((game.time || 0) * 10) % 4 : 0;
+    return `unit-medic-${u.side}-${frameIdx}`;
+  }
   const baseName = `unit-${u.typeId}-${u.side}`;
   // Le skin par unité est propre à chaque compte. Il faut donc savoir
   // quel skin appliquer à QUI.
@@ -9579,6 +9605,10 @@ async function boot() {
   } catch (err) {
     console.warn("[Émergence] Erreur de chargement des assets :", err);
   }
+
+  // Précharge la menu music (10 MB) en arrière-plan dès le boot.
+  // Au premier clic utilisateur, play() sera instantané (buffer déjà rempli).
+  audio.preloadMenuMusic();
 
   // Démarre l'écran de menu (le gameplay s'init au clic sur Jouer)
   game.screen = "menu";
