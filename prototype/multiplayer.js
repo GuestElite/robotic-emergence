@@ -25,6 +25,7 @@ const listeners = {
   opponentLeave: new Set(),
   lobbyUpdate: new Set(),     // changements de re_lobbies (guest joins, ready flags…)
   start: new Set(),            // les 2 joueurs prêts → partie démarre
+  chat: new Set(),             // message texte reçu via broadcast
 };
 
 const state = {
@@ -103,13 +104,14 @@ function applyLobbyRow(row) {
   }
 }
 
-async function createLobby({ biome = "desert", difficulty = "normal" } = {}) {
+async function createLobby({ biome = "desert", difficulty = "normal", visibility = "public" } = {}) {
   await init();
   if (!state.me) return { error: "not_authenticated" };
 
   const { data, error } = await supabase.rpc("re_create_lobby", {
     p_biome: biome,
     p_difficulty: difficulty,
+    p_visibility: visibility,
   });
   if (error) {
     console.error("[RE_MP] re_create_lobby", error);
@@ -123,6 +125,7 @@ async function createLobby({ biome = "desert", difficulty = "normal" } = {}) {
   state.role = "host";
   state.opponent = null;
   state.status = "waiting";
+  state.visibility = row.visibility || visibility;
   state.hostReady = false;
   state.guestReady = false;
   state.startFired = false;
@@ -140,7 +143,17 @@ async function createLobby({ biome = "desert", difficulty = "normal" } = {}) {
     biome: state.biome,
     difficulty: state.difficulty,
     seed: state.seed,
+    visibility: state.visibility,
   };
+}
+
+// Retourne la liste des salons publics waiting + parties en cours pour le navigateur.
+async function listActiveLobbies() {
+  await init();
+  if (!state.me) return { error: "not_authenticated" };
+  const { data, error } = await supabase.rpc("re_list_active_lobbies");
+  if (error) return { error: error.message || "rpc_failed" };
+  return { lobbies: data || [] };
 }
 
 async function joinByCode(code) {
@@ -222,6 +235,7 @@ async function setupChannel() {
   ch.on("broadcast", { event: "input" },    ({ payload }) => notify("input", payload));
   ch.on("broadcast", { event: "snapshot" }, ({ payload }) => notify("snapshot", payload));
   ch.on("broadcast", { event: "gameover" }, ({ payload }) => notify("gameOver", payload));
+  ch.on("broadcast", { event: "chat" },     ({ payload }) => notify("chat", payload));
   ch.on("broadcast", { event: "hello" },    ({ payload }) => {
     // ping de présence : utile pour que le host sache que le guest est connecté
     if (state.role === "host" && payload?.from === "guest") {
@@ -315,9 +329,37 @@ function sendSnapshot(snap) {
   state.channel.send({ type: "broadcast", event: "snapshot", payload: snap });
 }
 
-function sendGameOver(winnerSide) {
+function sendGameOver(winnerSide, extras = {}) {
   if (!state.channel) return;
-  state.channel.send({ type: "broadcast", event: "gameover", payload: { winnerSide } });
+  state.channel.send({ type: "broadcast", event: "gameover", payload: { winnerSide, ...extras } });
+}
+
+// Envoie un message texte sur le canal du salon. Le payload inclut le pseudo
+// pour qu'on n'ait pas à le résoudre côté receveur, et un id local pour
+// dédupliquer (échos locaux).
+function sendChat(text) {
+  if (!state.channel) return;
+  const trimmed = (text || "").toString().slice(0, 240);
+  if (!trimmed.trim()) return;
+  state.channel.send({
+    type: "broadcast",
+    event: "chat",
+    payload: {
+      text: trimmed,
+      username: state.me?.username || "anonyme",
+      from: state.role,
+      ts: Date.now(),
+      id: `${state.me?.id || "x"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    },
+  });
+  // Diffuse aussi vers soi-même (broadcast a self:false)
+  notify("chat", {
+    text: trimmed,
+    username: state.me?.username || "anonyme",
+    from: state.role,
+    ts: Date.now(),
+    self: true,
+  });
 }
 
 async function reportFinish(winnerSide) {
@@ -336,10 +378,12 @@ const RE_MP = {
   createLobby,
   joinByCode,
   setReady,
+  listActiveLobbies,
   leave,
   sendInput,
   sendSnapshot,
   sendGameOver,
+  sendChat,
   reportFinish,
   onInput:         (cb) => on("input", cb),
   onSnapshot:      (cb) => on("snapshot", cb),
@@ -347,6 +391,7 @@ const RE_MP = {
   onOpponentLeave: (cb) => on("opponentLeave", cb),
   onLobbyUpdate:   (cb) => on("lobbyUpdate", cb),
   onStart:         (cb) => on("start", cb),
+  onChat:          (cb) => on("chat", cb),
 };
 
 window.RE_MP = RE_MP;

@@ -1879,6 +1879,7 @@ function render(ctx) {
   drawScrollHints(ctx);
   drawUpgradePanel(ctx);
   drawSettingsPanel(ctx);
+  if (game.mode === "mp") drawInGameChat(ctx);
   if (game.gameOver) drawGameOverOverlay(ctx);
 }
 
@@ -3585,16 +3586,22 @@ function drawGameOverReport(ctx) {
   const playerX = px + PW * 0.62;
   const enemyX = px + PW - 28;
 
-  // Headers de colonne
+  // En MP on parle "MOI / ADVERSAIRE" depuis la perspective du joueur courant.
+  const isMp = game.mode === "mp";
+  const me = mySide();
+  const opp = oppSide();
+  const myColor = me === "player" ? COLORS.player : COLORS.enemy;
+  const oppColor = opp === "player" ? COLORS.player : COLORS.enemy;
+
   ctx.font = "bold 12px -apple-system, sans-serif";
   ctx.textAlign = "left";
   ctx.fillStyle = COLORS.hudMuted;
   ctx.fillText("Stat", labelX, py + 50);
   ctx.textAlign = "right";
-  ctx.fillStyle = COLORS.player;
-  ctx.fillText("JOUEUR", playerX, py + 50);
-  ctx.fillStyle = COLORS.enemy;
-  ctx.fillText("ENNEMI", enemyX, py + 50);
+  ctx.fillStyle = isMp ? myColor : COLORS.player;
+  ctx.fillText(isMp ? "MOI" : "JOUEUR", playerX, py + 50);
+  ctx.fillStyle = isMp ? oppColor : COLORS.enemy;
+  ctx.fillText(isMp ? "ADVERSAIRE" : "ENNEMI", enemyX, py + 50);
 
   ctx.strokeStyle = "rgba(255,255,255,0.10)";
   ctx.beginPath();
@@ -3602,8 +3609,8 @@ function drawGameOverReport(ctx) {
   ctx.lineTo(px + PW - 20, py + 70);
   ctx.stroke();
 
-  const ps = game.stats.player;
-  const es = game.stats.enemy;
+  const ps = isMp ? game.stats[me] : game.stats.player;
+  const es = isMp ? game.stats[opp] : game.stats.enemy;
   const min = Math.floor(game.time / 60);
   const sec = Math.floor(game.time % 60).toString().padStart(2, "0");
 
@@ -4771,9 +4778,14 @@ function setupInput(canvas) {
       if (!lr) return;
 
       if (page === "choice") {
-        if (lr.choiceCreate && pointInRect(sx, sy, lr.choiceCreate)) {
+        if (lr.choiceCreatePublic && pointInRect(sx, sy, lr.choiceCreatePublic)) {
           audio.playSFX("click");
-          mpCreateRoom();
+          mpCreateRoom({ visibility: "public" });
+          return;
+        }
+        if (lr.choiceCreatePrivate && pointInRect(sx, sy, lr.choiceCreatePrivate)) {
+          audio.playSFX("click");
+          mpCreateRoom({ visibility: "private" });
           return;
         }
         if (lr.choiceJoin && pointInRect(sx, sy, lr.choiceJoin)) {
@@ -4788,6 +4800,20 @@ function setupInput(canvas) {
           cancelMultiplayer();
           return;
         }
+        if (lr.refresh && pointInRect(sx, sy, lr.refresh)) {
+          audio.playSFX("click");
+          refreshPublicLobbies();
+          return;
+        }
+        if (Array.isArray(lr.publicItems)) {
+          for (const item of lr.publicItems) {
+            if (pointInRect(sx, sy, item.rect) && item.code) {
+              audio.playSFX("click");
+              mpJoinByCode(item.code);
+              return;
+            }
+          }
+        }
       } else if (page === "join") {
         if (lr.joinOk && pointInRect(sx, sy, lr.joinOk)) {
           audio.playSFX("click");
@@ -4801,6 +4827,14 @@ function setupInput(canvas) {
           return;
         }
       } else if (page === "room") {
+        if (lr.chatInput && pointInRect(sx, sy, lr.chatInput)) {
+          game.ui.chatActive = true;
+          return;
+        }
+        if (lr.chatSend && pointInRect(sx, sy, lr.chatSend)) {
+          sendCurrentChat();
+          return;
+        }
         if (lr.ready && pointInRect(sx, sy, lr.ready)) {
           const hasOpp = !!(game.mp?.opponent?.username);
           if (!hasOpp) return; // pas de prêt sans adversaire
@@ -4822,6 +4856,8 @@ function setupInput(canvas) {
           cancelMultiplayer();
           return;
         }
+        // Clic en dehors du chat → désactive l'édition du chat
+        game.ui.chatActive = false;
       }
       return;
     }
@@ -5065,6 +5101,21 @@ function setupInput(canvas) {
     }
     if (game.screen === "lobby") {
       const page = game.ui.lobbyPage || "choice";
+      // Si on est en train de taper dans le chat, capture tout le clavier
+      if (page === "room" && game.ui.chatActive) {
+        if (evt.key === "Escape") { game.ui.chatActive = false; return; }
+        if (evt.key === "Enter") { sendCurrentChat(); return; }
+        if (evt.key === "Backspace") {
+          game.ui.chatInput = (game.ui.chatInput || "").slice(0, -1);
+          return;
+        }
+        if (evt.key && evt.key.length === 1) {
+          const cur = game.ui.chatInput || "";
+          if (cur.length < 240) game.ui.chatInput = cur + evt.key;
+          return;
+        }
+        return;
+      }
       if (evt.key === "Escape") {
         if (page === "choice") cancelMultiplayer();
         else if (page === "join") { game.ui.lobbyPage = "choice"; game.ui.codeInputError = null; }
@@ -5091,11 +5142,16 @@ function setupInput(canvas) {
           return;
         }
       } else if (page === "room") {
+        if (evt.key === "t" || evt.key === "T") {
+          game.ui.chatActive = true;
+          evt.preventDefault();
+          return;
+        }
         if (evt.key === "Enter" || evt.key === " ") {
           if (game.mp?.opponent?.username) mpToggleReady();
         }
       } else if (page === "choice") {
-        if (evt.key === "1") mpCreateRoom();
+        if (evt.key === "1") mpCreateRoom({ visibility: "public" });
         if (evt.key === "2") { game.ui.lobbyPage = "join"; game.ui.codeInput = ""; game.ui.codeInputError = null; }
       }
       return;
@@ -5103,6 +5159,26 @@ function setupInput(canvas) {
     if (game.gameOver) {
       if ((evt.key === "Enter" || evt.key === " ") && game.mode !== "mp") startGame(game.difficulty);
       if (evt.key === "Escape" || evt.key === "m") goToMenu();
+      return;
+    }
+    // Chat in-game (MP) : T pour ouvrir, capture clavier quand actif.
+    if (game.mode === "mp" && game.ui.chatActive) {
+      if (evt.key === "Escape") { game.ui.chatActive = false; game.ui.chatInput = ""; return; }
+      if (evt.key === "Enter")  { sendCurrentChat(); return; }
+      if (evt.key === "Backspace") {
+        game.ui.chatInput = (game.ui.chatInput || "").slice(0, -1);
+        return;
+      }
+      if (evt.key && evt.key.length === 1) {
+        const cur = game.ui.chatInput || "";
+        if (cur.length < 240) game.ui.chatInput = cur + evt.key;
+        return;
+      }
+      return;
+    }
+    if (game.mode === "mp" && (evt.key === "t" || evt.key === "T")) {
+      game.ui.chatActive = true;
+      evt.preventDefault();
       return;
     }
     if (evt.key === "Escape") {
@@ -5210,6 +5286,9 @@ function goToMenu() {
     game.mp = null;
   }
   game.mode = "solo";
+  game.ui.chatActive = false;
+  game.ui.chatInput = "";
+  game.ui.chatMessages = [];
 }
 
 // -------------------------------------------------------------
@@ -5244,6 +5323,13 @@ function startMultiplayer() {
   game.ui.lobbyMessage = "";
   game.ui.codeInput = "";
   game.ui.codeInputError = null;
+  game.ui.publicLobbies = [];
+  game.ui.publicLobbiesLastFetch = 0;
+  game.ui.publicLobbiesLoading = false;
+  game.ui.chatInput = "";
+  game.ui.chatActive = false;
+  game.ui.chatMessages = [];
+  game.ui.lobbyVisibility = "public";
 
   // Sub aux events Realtime (idempotent : on le fait 1 seule fois par session de page)
   if (!game.mp.subscribed) {
@@ -5253,15 +5339,48 @@ function startMultiplayer() {
     window.RE_MP.onOpponentLeave(handleMpOpponentLeave);
     window.RE_MP.onLobbyUpdate(handleMpLobbyUpdate);
     window.RE_MP.onStart(handleMpStart);
+    window.RE_MP.onChat(handleMpChat);
     game.mp.subscribed = true;
   }
+  // Démarre la première récupération de la liste des salons publics.
+  refreshPublicLobbies();
 }
 
-async function mpCreateRoom() {
+async function refreshPublicLobbies() {
+  if (!window.RE_MP) return;
+  if (game.ui.publicLobbiesLoading) return;
+  game.ui.publicLobbiesLoading = true;
+  try {
+    const res = await window.RE_MP.listActiveLobbies();
+    if (res && Array.isArray(res.lobbies)) {
+      game.ui.publicLobbies = res.lobbies;
+      game.ui.publicLobbiesLastFetch = performance.now();
+    }
+  } catch {}
+  game.ui.publicLobbiesLoading = false;
+}
+
+function handleMpChat(payload) {
+  if (!payload) return;
+  if (!game.ui.chatMessages) game.ui.chatMessages = [];
+  game.ui.chatMessages.push({
+    text: payload.text,
+    username: payload.username,
+    from: payload.from,
+    ts: payload.ts || Date.now(),
+    self: !!payload.self,
+    receivedAt: performance.now(),
+  });
+  if (game.ui.chatMessages.length > 60) game.ui.chatMessages.shift();
+}
+
+async function mpCreateRoom(opts = {}) {
   flashLobbyMessage("Création du salon…");
+  const visibility = opts.visibility || game.ui.lobbyVisibility || "public";
   const res = await window.RE_MP.createLobby({
     biome: game.biome,
     difficulty: game.difficulty,
+    visibility,
   });
   if (res?.error) {
     flashLobbyMessage(`Erreur : ${res.error}`, "error");
@@ -5270,6 +5389,7 @@ async function mpCreateRoom() {
   game.mp.role = "host";
   game.mp.lobbyId = res.lobbyId;
   game.mp.code = res.code;
+  game.mp.visibility = res.visibility || visibility;
   game.mp.status = "waiting";
   if (res.biome) game.biome = res.biome;
   if (res.difficulty) {
@@ -5429,51 +5549,172 @@ function drawLobbyScreen(ctx) {
 }
 
 function drawLobbyChoice(ctx) {
+  // Rafraîchit la liste toutes les 5 secondes
+  if (performance.now() - (game.ui.publicLobbiesLastFetch || 0) > 5000) refreshPublicLobbies();
+
   const cx = CONFIG.CANVAS_W / 2;
   ctx.fillStyle = COLORS.hudText;
-  ctx.font = "bold 44px -apple-system, sans-serif";
+  ctx.font = "bold 36px -apple-system, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.shadowColor = COLORS.enemy;
-  ctx.shadowBlur = 18;
-  ctx.fillText("👥 MULTIJOUEUR", cx, 150);
+  ctx.shadowBlur = 16;
+  ctx.fillText("👥 MULTIJOUEUR", cx, 80);
   ctx.shadowBlur = 0;
 
+  // ── Colonne gauche : actions ──
+  const leftX = 60;
+  const colW = 360;
+  const btnW = colW, btnH = 70, gap = 14;
+  const startY = 130;
+
   ctx.fillStyle = COLORS.hudMuted;
-  ctx.font = "14px -apple-system, sans-serif";
-  ctx.fillText("Crée un salon et partage le code avec un ami, ou rejoins le sien.", cx, 195);
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("CRÉER OU REJOINDRE", leftX, startY - 14);
 
-  const btnW = 320, btnH = 90;
-  const gap = 24;
-  const totalH = btnH * 2 + gap;
-  const startY = 250;
+  const createPubRect  = { x: leftX, y: startY,                   w: btnW, h: btnH };
+  const createPrivRect = { x: leftX, y: startY + btnH + gap,      w: btnW, h: btnH };
+  const joinRect       = { x: leftX, y: startY + (btnH + gap) * 2, w: btnW, h: btnH };
 
-  const createRect = { x: cx - btnW / 2, y: startY, w: btnW, h: btnH };
-  const joinRect   = { x: cx - btnW / 2, y: startY + btnH + gap, w: btnW, h: btnH };
-  drawLobbyButton(ctx, createRect, "✨  CRÉER UN SALON", "Génère un code à partager", COLORS.player, COLORS.playerDark);
-  drawLobbyButton(ctx, joinRect, "🔑  REJOINDRE UN SALON", "Entre le code de l'hôte", COLORS.enemy, COLORS.enemyDark || "rgba(220,38,38,0.4)");
+  drawLobbyButton(ctx, createPubRect,  "✨  Créer un salon PUBLIC",   "Apparaît dans la liste à droite", COLORS.player, COLORS.playerDark);
+  drawLobbyButton(ctx, createPrivRect, "🔒  Créer un salon PRIVÉ",   "Seuls ceux qui ont le code rejoignent", "rgba(168,85,247,1)", "rgba(91,33,182,0.6)");
+  drawLobbyButton(ctx, joinRect,       "🔑  Rejoindre via code",     "Entre un code à 6 caractères",   COLORS.enemy, COLORS.enemyDark || "rgba(220,38,38,0.4)");
 
-  // Bouton retour
-  const backW = 180, backH = 40;
-  const backRect = { x: cx - backW / 2, y: startY + totalH + 36, w: backW, h: backH };
+  // Bouton retour menu
+  const backW = 200, backH = 36;
+  const backRect = { x: leftX, y: startY + (btnH + gap) * 3 + 14, w: backW, h: backH };
   const backHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, backRect);
   ctx.fillStyle = backHover ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
-  roundedRect(ctx, backRect.x, backRect.y, backRect.w, backRect.h, 8);
+  roundedRect(ctx, backRect.x, backRect.y, backRect.w, backRect.h, 6);
   ctx.fill();
   ctx.strokeStyle = "rgba(255,255,255,0.25)";
   ctx.lineWidth = 1;
   ctx.stroke();
   ctx.fillStyle = "#fff";
-  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.font = "bold 13px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
   ctx.fillText("↩  Retour au menu", backRect.x + backRect.w / 2, backRect.y + backRect.h / 2);
 
   if (game.ui.lobbyMessage) {
     ctx.fillStyle = (game.ui.lobbyMessageLevel === "error") ? COLORS.enemy : COLORS.hudMuted;
-    ctx.font = "13px -apple-system, sans-serif";
-    ctx.fillText(game.ui.lobbyMessage, cx, CONFIG.H - 60);
+    ctx.font = "12px -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(game.ui.lobbyMessage, leftX, backRect.y + backRect.h + 24);
   }
 
-  game.ui.lobbyRects = { choiceCreate: createRect, choiceJoin: joinRect, back: backRect };
+  // ── Colonne droite : navigateur de salons + parties en cours ──
+  const rightX = CONFIG.CANVAS_W - 60 - 460;
+  const rightW = 460;
+
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("SALONS PUBLICS OUVERTS", rightX, startY - 14);
+
+  // Bouton refresh
+  const refreshRect = { x: rightX + rightW - 90, y: startY - 26, w: 90, h: 22 };
+  const refreshHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, refreshRect);
+  ctx.fillStyle = refreshHover ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
+  roundedRect(ctx, refreshRect.x, refreshRect.y, refreshRect.w, refreshRect.h, 4);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 11px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(game.ui.publicLobbiesLoading ? "Chargement…" : "🔄 Actualiser", refreshRect.x + refreshRect.w / 2, refreshRect.y + refreshRect.h / 2);
+
+  // Sections waiting + playing
+  const waiting = (game.ui.publicLobbies || []).filter((l) => l.status === "waiting");
+  const playing = (game.ui.publicLobbies || []).filter((l) => l.status === "playing");
+
+  const rowH = 44;
+  let curY = startY;
+  const itemRects = [];
+
+  if (waiting.length === 0) {
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.font = "13px -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("Aucun salon public ouvert. Crée le premier !", rightX, curY + 22);
+    curY += 60;
+  } else {
+    for (const l of waiting.slice(0, 5)) {
+      const rect = { x: rightX, y: curY, w: rightW, h: rowH };
+      const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+      ctx.fillStyle = hover ? "rgba(59,130,246,0.18)" : "rgba(255,255,255,0.05)";
+      roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 8);
+      ctx.fill();
+      ctx.strokeStyle = hover ? COLORS.player : "rgba(255,255,255,0.10)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Pseudo + code à gauche
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 14px -apple-system, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`${l.host_username || "Hôte"}`, rect.x + 14, rect.y + 16);
+      ctx.fillStyle = COLORS.hudMuted;
+      ctx.font = "11px ui-monospace, SFMono-Regular, monospace";
+      ctx.fillText(`Code : ${l.code || "—"}  ·  ${BIOME_LABELS[l.biome] || l.biome}  ·  ${DIFFICULTY_PRESETS[l.difficulty]?.label || l.difficulty}`, rect.x + 14, rect.y + 31);
+
+      // CTA à droite
+      ctx.fillStyle = hover ? COLORS.player : COLORS.playerDark;
+      const ctaW = 90, ctaH = 28;
+      const ctaRect = { x: rect.x + rect.w - ctaW - 8, y: rect.y + (rect.h - ctaH) / 2, w: ctaW, h: ctaH };
+      roundedRect(ctx, ctaRect.x, ctaRect.y, ctaRect.w, ctaRect.h, 6);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 12px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("▶ Rejoindre", ctaRect.x + ctaRect.w / 2, ctaRect.y + ctaRect.h / 2);
+
+      itemRects.push({ rect, code: l.code, type: "join" });
+      curY += rowH + 6;
+    }
+  }
+
+  // Parties en cours
+  curY += 18;
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText(`PARTIES EN COURS (${playing.length})`, rightX, curY);
+  curY += 16;
+
+  if (playing.length === 0) {
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.font = "12px -apple-system, sans-serif";
+    ctx.fillText("Aucune partie en cours.", rightX, curY + 16);
+  } else {
+    for (const l of playing.slice(0, 4)) {
+      const rect = { x: rightX, y: curY, w: rightW, h: 34 };
+      ctx.fillStyle = "rgba(34,197,94,0.10)";
+      roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 6);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(34,197,94,0.35)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 12px -apple-system, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`${l.host_username || "?"} vs ${l.guest_username || "?"}`, rect.x + 12, rect.y + rect.h / 2 - 7);
+      ctx.fillStyle = COLORS.hudMuted;
+      ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
+      const since = l.started_at ? Math.floor((Date.now() - new Date(l.started_at).getTime()) / 1000) : 0;
+      const minS = Math.floor(since / 60).toString().padStart(2, "0");
+      const secS = (since % 60).toString().padStart(2, "0");
+      ctx.fillText(`${BIOME_LABELS[l.biome] || l.biome}  ·  ${DIFFICULTY_PRESETS[l.difficulty]?.label || l.difficulty}  ·  ${minS}:${secS}`, rect.x + 12, rect.y + rect.h / 2 + 7);
+
+      curY += 34 + 4;
+    }
+  }
+
+  game.ui.lobbyRects = { choiceCreatePublic: createPubRect, choiceCreatePrivate: createPrivRect, choiceJoin: joinRect, back: backRect, refresh: refreshRect, publicItems: itemRects };
 }
 
 function drawLobbyJoin(ctx) {
@@ -5557,7 +5798,12 @@ function drawLobbyJoin(ctx) {
 }
 
 function drawLobbyRoom(ctx) {
-  const cx = CONFIG.CANVAS_W / 2;
+  // Le contenu principal du salon prend la zone de gauche (~870 px),
+  // le panneau de chat occupe le côté droit.
+  const chatW = 360;
+  const chatPadL = 24;
+  const mainW = CONFIG.CANVAS_W - chatW - chatPadL;
+  const cx = Math.round(mainW / 2);
   const mp = game.mp || {};
 
   ctx.fillStyle = COLORS.hudText;
@@ -5655,7 +5901,247 @@ function drawLobbyRoom(ctx) {
   ctx.font = "bold 13px -apple-system, sans-serif";
   ctx.fillText("Quitter le salon", leaveRect.x + leaveRect.w / 2, leaveRect.y + leaveRect.h / 2);
 
-  game.ui.lobbyRects = { ready: readyRect, leave: leaveRect, copy: copyRect, codeBox };
+  // Panneau de chat à droite (toujours visible dans le salon)
+  const chatRects = drawChatPanel(ctx, {
+    x: CONFIG.CANVAS_W - chatW - 16, y: 80, w: chatW, h: CONFIG.H - 100,
+  });
+
+  game.ui.lobbyRects = { ready: readyRect, leave: leaveRect, copy: copyRect, codeBox, ...chatRects };
+}
+
+// Dessine un panneau de chat (utilisé dans le salon et en jeu).
+// Retourne les rects utiles pour le handler de clic (input box, send button).
+function drawChatPanel(ctx, opts) {
+  const { x, y, w, h } = opts;
+  ctx.save();
+  ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+  roundedRect(ctx, x, y, w, h, 10);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Header
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("💬  Chat", x + 14, y + 22);
+
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "10px -apple-system, sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillText("Entrée pour envoyer", x + w - 12, y + 22);
+
+  // Séparateur
+  ctx.strokeStyle = "rgba(255,255,255,0.10)";
+  ctx.beginPath();
+  ctx.moveTo(x + 10, y + 32);
+  ctx.lineTo(x + w - 10, y + 32);
+  ctx.stroke();
+
+  // Zone des messages (scrollée vers le bas — on affiche les derniers)
+  const inputH = 56;
+  const messagesAreaY = y + 38;
+  const messagesAreaH = h - inputH - 38 - 8;
+  const messages = game.ui.chatMessages || [];
+  ctx.font = "12px -apple-system, sans-serif";
+  ctx.textBaseline = "alphabetic";
+  let cy = messagesAreaY + messagesAreaH;
+  // Affiche du plus récent au plus ancien, vers le haut
+  for (let i = messages.length - 1; i >= 0 && cy > messagesAreaY + 16; i--) {
+    const m = messages[i];
+    const lines = wrapTextToLines(ctx, m.text, w - 24);
+    const blockH = 14 + lines.length * 15 + 4;
+    cy -= blockH;
+    if (cy < messagesAreaY) break;
+
+    // Pseudo + horaire
+    const meSide = mySide();
+    const isMine = m.self
+      || (game.mp?.role && m.from === game.mp.role)
+      || (m.username && window.RE_AUTH?.profile?.username && m.username === window.RE_AUTH.profile.username);
+    ctx.fillStyle = isMine ? COLORS.hpGood : (m.from === "host" ? COLORS.player : COLORS.enemy);
+    ctx.font = "bold 11px -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(m.username || "anonyme", x + 12, cy + 10);
+
+    // Texte
+    ctx.fillStyle = "#fff";
+    ctx.font = "12px -apple-system, sans-serif";
+    for (let li = 0; li < lines.length; li++) {
+      ctx.fillText(lines[li], x + 12, cy + 22 + li * 14);
+    }
+  }
+  if (messages.length === 0) {
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.font = "12px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Aucun message. Lance la conversation !", x + w / 2, messagesAreaY + 32);
+  }
+
+  // Champ input + bouton envoyer
+  const inputBox = { x: x + 10, y: y + h - inputH + 8, w: w - 92, h: 36 };
+  const sendBtn  = { x: inputBox.x + inputBox.w + 6, y: inputBox.y, w: 64, h: 36 };
+
+  const active = !!game.ui.chatActive;
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  roundedRect(ctx, inputBox.x, inputBox.y, inputBox.w, inputBox.h, 6);
+  ctx.fill();
+  ctx.strokeStyle = active ? COLORS.player : "rgba(255,255,255,0.15)";
+  ctx.lineWidth = active ? 2 : 1;
+  ctx.stroke();
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "13px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  const input = game.ui.chatInput || "";
+  const display = input.length > 38 ? "…" + input.slice(-38) : input;
+  if (!input) {
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.fillText(active ? "Tape un message…" : "Clique ici ou appuie sur T pour discuter", inputBox.x + 10, inputBox.y + inputBox.h / 2);
+  } else {
+    ctx.fillText(display, inputBox.x + 10, inputBox.y + inputBox.h / 2);
+    // Curseur clignotant si actif
+    if (active && (Math.floor(performance.now() / 500) % 2) === 0) {
+      const tw = ctx.measureText(display).width;
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(inputBox.x + 10 + tw + 1, inputBox.y + 8, 1.5, inputBox.h - 16);
+    }
+  }
+
+  const sendHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, sendBtn);
+  ctx.fillStyle = sendHover && input ? COLORS.player : (input ? COLORS.playerDark : "rgba(255,255,255,0.08)");
+  roundedRect(ctx, sendBtn.x, sendBtn.y, sendBtn.w, sendBtn.h, 6);
+  ctx.fill();
+  ctx.strokeStyle = input ? COLORS.player : "rgba(255,255,255,0.15)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = input ? "#fff" : COLORS.hudMuted;
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("Envoyer", sendBtn.x + sendBtn.w / 2, sendBtn.y + sendBtn.h / 2);
+
+  ctx.restore();
+  return { chatInput: inputBox, chatSend: sendBtn };
+}
+
+// Découpe un texte en lignes selon la largeur disponible (renvoie array de strings).
+function wrapTextToLines(ctx, text, maxW) {
+  const words = (text || "").split(/\s+/);
+  const lines = [];
+  let cur = "";
+  for (const w of words) {
+    const test = cur ? cur + " " + w : w;
+    if (ctx.measureText(test).width <= maxW) {
+      cur = test;
+    } else {
+      if (cur) lines.push(cur);
+      // Si le mot seul est plus large, on coupe à la main
+      if (ctx.measureText(w).width > maxW) {
+        let chunk = "";
+        for (const ch of w) {
+          if (ctx.measureText(chunk + ch).width > maxW) {
+            lines.push(chunk);
+            chunk = ch;
+          } else chunk += ch;
+        }
+        cur = chunk;
+      } else {
+        cur = w;
+      }
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+// Overlay de chat in-game : messages flottants à gauche du minimap, input
+// box en bas de l'écran quand chatActive. Géré uniquement en mode MP.
+function drawInGameChat(ctx) {
+  const messages = game.ui.chatMessages || [];
+  const now = performance.now();
+  // Affiche les 5 derniers messages, fade après 12s
+  const recent = messages.slice(-6).filter((m) => now - m.receivedAt < 12000);
+  const boxX = 14;
+  const boxY = CONFIG.HUD_H + 14;
+  const boxW = 300;
+  let cy = boxY;
+  ctx.save();
+  ctx.font = "12px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  for (const m of recent) {
+    const age = now - m.receivedAt;
+    const alpha = age < 9000 ? 1 : Math.max(0, 1 - (age - 9000) / 3000);
+    const lines = wrapTextToLines(ctx, m.text, boxW - 18);
+    const blockH = 14 + lines.length * 14 + 6;
+    // Fond semi-opaque
+    ctx.fillStyle = `rgba(0,0,0,${(0.55 * alpha).toFixed(3)})`;
+    roundedRect(ctx, boxX, cy, boxW, blockH, 6);
+    ctx.fill();
+    // Pseudo coloré
+    const isMine = m.self
+      || (game.mp?.role && m.from === game.mp.role)
+      || (m.username && window.RE_AUTH?.profile?.username && m.username === window.RE_AUTH.profile.username);
+    ctx.fillStyle = `rgba(${isMine ? "187,247,208" : m.from === "host" ? "59,130,246" : "239,68,68"},${alpha.toFixed(3)})`;
+    ctx.font = "bold 11px -apple-system, sans-serif";
+    ctx.fillText(m.username || "anonyme", boxX + 10, cy + 12);
+    ctx.fillStyle = `rgba(255,255,255,${alpha.toFixed(3)})`;
+    ctx.font = "12px -apple-system, sans-serif";
+    for (let li = 0; li < lines.length; li++) {
+      ctx.fillText(lines[li], boxX + 10, cy + 24 + li * 14);
+    }
+    cy += blockH + 4;
+  }
+
+  // Hint
+  if (!game.ui.chatActive && recent.length === 0) {
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.font = "11px -apple-system, sans-serif";
+    ctx.fillText("Appuie sur T pour discuter", boxX + 4, boxY + 14);
+  }
+
+  // Input box (en bas-gauche) si actif
+  if (game.ui.chatActive) {
+    const inW = 460, inH = 36;
+    const inX = 14;
+    const inY = CONFIG.H - inH - 14;
+    const rect = { x: inX, y: inY, w: inW, h: inH };
+    ctx.fillStyle = "rgba(15, 23, 42, 0.92)";
+    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 8);
+    ctx.fill();
+    ctx.strokeStyle = COLORS.player;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.font = "13px -apple-system, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    const inText = game.ui.chatInput || "";
+    const display = inText.length > 56 ? "…" + inText.slice(-56) : inText;
+    if (!inText) {
+      ctx.fillStyle = COLORS.hudMuted;
+      ctx.fillText("Tape un message — Entrée pour envoyer · Échap pour annuler", rect.x + 12, rect.y + rect.h / 2);
+    } else {
+      ctx.fillText(display, rect.x + 12, rect.y + rect.h / 2);
+      if ((Math.floor(now / 500) % 2) === 0) {
+        const tw = ctx.measureText(display).width;
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(rect.x + 12 + tw + 1, rect.y + 8, 1.5, rect.h - 16);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function sendCurrentChat() {
+  const txt = (game.ui.chatInput || "").trim();
+  if (!txt) return;
+  if (window.RE_MP) window.RE_MP.sendChat(txt);
+  game.ui.chatInput = "";
+  game.ui.chatActive = false;
 }
 
 function drawPlayerCard(ctx, rect, role, name, ready, sideColor) {
@@ -5726,6 +6212,7 @@ function buildMpSnapshot() {
     explosions: game.explosions.slice(-12).map((ex) => ({ ...ex })),
     lightning: game.lightning ? { ...game.lightning, segments: game.lightning.segments?.slice() || [] } : null,
     cd: { player: game.lightningCooldown, enemy: game.mp?.enemyLightningCooldown || 0 },
+    stats: { player: game.stats.player, enemy: game.stats.enemy },
     gameOver: game.gameOver ? { winner: game.gameOver.winner } : null,
   };
 }
@@ -5836,6 +6323,12 @@ function applyMpSnapshot(snap) {
   if (snap.cd) {
     // Sur le guest, "ma" lightning cd est celle de mon côté
     game.lightningCooldown = snap.cd[mySide()] ?? 0;
+  }
+  if (snap.stats) {
+    // Snapshot des stats (host autoritaire) — permet au guest d'avoir un
+    // rapport de fin de partie complet.
+    if (snap.stats.player) game.stats.player = { ...game.stats.player, ...snap.stats.player };
+    if (snap.stats.enemy)  game.stats.enemy  = { ...game.stats.enemy,  ...snap.stats.enemy };
   }
   if (snap.gameOver && !game.gameOver) {
     handleMpGameOver({ winnerSide: snap.gameOver.winner });
