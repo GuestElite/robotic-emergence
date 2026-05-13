@@ -567,6 +567,7 @@ const game = {
   props: [],                       // décors fixes posés sur la map (rocher, cactus, etc.)
   projectiles: [],                 // bolts en vol (remplace attackFx)
   flashes: [],                     // muzzle + impact flashes
+  ambientAnims: { active: [], nextSpawnAt: 0 },  // animations d'ambiance par biome
   attackFx: [],                    // legacy, conservé pour compat — vidé en pratique
   explosions: [],
   lightning: null,                // { x, y1, y2, age, ttl } pendant l'animation
@@ -735,6 +736,8 @@ const SPRITE_FILES = [
   "prop-ice-shard",
   "prop-snow-pile",
   "prop-dead-branch",
+  // Ambient anim assets
+  "anim-tumbleweed",
 ];
 
 // -------------------------------------------------------------
@@ -2015,6 +2018,7 @@ function update(dt) {
   updateAttackFx(dt);
   updateProjectiles(dt);
   updateFlashes(dt);
+  updateAmbientAnims(dt);
   updateExplosions(dt);
   checkGameOver();
   game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
@@ -2201,6 +2205,7 @@ function render(ctx) {
   ctx.translate(-game.camera.x, 0);
   drawGround(ctx);
   drawBattlefieldLane(ctx);
+  drawAmbientAnims(ctx);   // sous les props et unités, au-dessus du sol
   drawProps(ctx);
   drawBase(ctx, "player");
   drawBase(ctx, "enemy");
@@ -3296,6 +3301,180 @@ function drawFlashes(ctx) {
         ctx.lineTo(f.x + Math.cos(ang) * (2 + armLen), f.y + Math.sin(ang) * (2 + armLen));
         ctx.stroke();
       }
+      ctx.restore();
+    }
+  }
+}
+
+// -------------------------------------------------------------
+// Ambient anims par biome — tumbleweed, snowfall, pluie tropicale
+// -------------------------------------------------------------
+
+const AMBIENT_ANIM_PROFILES = {
+  desert: {
+    type: "tumbleweed",
+    spawnIntervalMin: 20, spawnIntervalMax: 35,
+  },
+  snow: {
+    type: "snowfall",
+    spawnIntervalMin: 30, spawnIntervalMax: 50,
+    eventDurationMin: 5, eventDurationMax: 7,
+    particleRate: 14, maxParticles: 80,
+  },
+  jungle: {
+    type: "rain",
+    spawnIntervalMin: 25, spawnIntervalMax: 45,
+    eventDurationMin: 4, eventDurationMax: 7,
+    particleRate: 28, maxParticles: 100,
+  },
+};
+
+function spawnTumbleweed() {
+  // Le tumbleweed traverse la zone VISIBLE du joueur (pas tout le monde) :
+  // spawn juste hors écran d'un côté, end juste hors écran de l'autre.
+  const dir = Math.random() < 0.5 ? 1 : -1;
+  const margin = 50;
+  const startX = dir > 0
+    ? game.camera.x - margin
+    : game.camera.x + CONFIG.CANVAS_W + margin;
+  const endX = dir > 0
+    ? game.camera.x + CONFIG.CANVAS_W + margin
+    : game.camera.x - margin;
+  // Y dans la zone jouable (pas trop haut/bas pour éviter les bases)
+  const playMinY = CONFIG.HUD_H + 100;
+  const playMaxY = CONFIG.H - 80;
+  const y = playMinY + Math.random() * (playMaxY - playMinY);
+  const speed = 260 + Math.random() * 120;  // 260-380 px/s
+  game.ambientAnims.active.push({
+    type: "tumbleweed",
+    x: startX, y,
+    vx: dir * speed,
+    endX,
+    rotation: Math.random() * Math.PI * 2,
+    rotationSpeed: dir * (3 + Math.random() * 3),  // rad/s
+    age: 0,
+  });
+}
+
+function spawnWeather(type) {
+  const profile = AMBIENT_ANIM_PROFILES[game.biome];
+  if (!profile) return;
+  const duration = profile.eventDurationMin +
+    Math.random() * (profile.eventDurationMax - profile.eventDurationMin);
+  game.ambientAnims.active.push({
+    type,  // "snowfall" ou "rain"
+    age: 0, ttl: duration,
+    particles: [],
+    spawnAccum: 0,
+  });
+}
+
+function updateAmbientAnims(dt) {
+  if (game.screen !== "playing") return;
+  const profile = AMBIENT_ANIM_PROFILES[game.biome];
+  if (!profile) return;
+
+  // ── Décompte du timer de spawn d'événement
+  game.ambientAnims.nextSpawnAt -= dt;
+  if (game.ambientAnims.nextSpawnAt <= 0) {
+    if (profile.type === "tumbleweed") {
+      spawnTumbleweed();
+    } else {
+      spawnWeather(profile.type);
+    }
+    game.ambientAnims.nextSpawnAt = profile.spawnIntervalMin +
+      Math.random() * (profile.spawnIntervalMax - profile.spawnIntervalMin);
+  }
+
+  // ── Mise à jour des événements actifs
+  for (const ev of game.ambientAnims.active) {
+    ev.age += dt;
+    if (ev.type === "tumbleweed") {
+      ev.x += ev.vx * dt;
+      ev.rotation += ev.rotationSpeed * dt;
+    } else if (ev.type === "snowfall" || ev.type === "rain") {
+      // Spawn de particules selon rate, pendant la durée de l'événement
+      if (ev.age < ev.ttl) {
+        ev.spawnAccum += dt;
+        const spawnInterval = 1 / profile.particleRate;
+        while (ev.spawnAccum >= spawnInterval &&
+               ev.particles.length < profile.maxParticles) {
+          ev.spawnAccum -= spawnInterval;
+          // Spawn dans la zone visible du joueur + un peu au-dessus
+          const px = game.camera.x + Math.random() * CONFIG.CANVAS_W;
+          const py = CONFIG.HUD_H - 20 + Math.random() * 30;
+          if (ev.type === "snowfall") {
+            ev.particles.push({
+              x: px, y: py,
+              vx: -15 + Math.random() * 30,  // drift latéral léger
+              vy: 60 + Math.random() * 50,   // chute lente
+              size: 1 + Math.floor(Math.random() * 2),
+            });
+          } else {
+            // Rain : gouttes diagonales rapides vers bas-gauche
+            ev.particles.push({
+              x: px, y: py,
+              vx: -120,
+              vy: 360 + Math.random() * 80,
+              length: 4 + Math.floor(Math.random() * 4),
+            });
+          }
+        }
+      }
+      // Update particles
+      for (const p of ev.particles) {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+      }
+      // Retirer celles hors-écran
+      ev.particles = ev.particles.filter((p) => p.y < CONFIG.H + 30);
+    }
+  }
+
+  // ── Cleanup : tumbleweeds arrivés à destination, weather events expirés sans particules restantes
+  game.ambientAnims.active = game.ambientAnims.active.filter((ev) => {
+    if (ev.type === "tumbleweed") {
+      // Arrivé à destination (selon direction)
+      const reachedEnd = ev.vx > 0 ? ev.x >= ev.endX : ev.x <= ev.endX;
+      return !reachedEnd;
+    }
+    // Weather : on garde tant que la durée n'est pas finie OU qu'il reste des particules
+    return ev.age < ev.ttl || ev.particles.length > 0;
+  });
+}
+
+function drawAmbientAnims(ctx) {
+  for (const ev of game.ambientAnims.active) {
+    if (ev.type === "tumbleweed") {
+      const img = sprites["anim-tumbleweed"];
+      if (!img) continue;
+      const size = 32;
+      ctx.save();
+      ctx.translate(ev.x, ev.y);
+      ctx.rotate(ev.rotation);
+      ctx.drawImage(img, -size / 2, -size / 2, size, size);
+      ctx.restore();
+    } else if (ev.type === "snowfall") {
+      // Flocons blancs avec léger glow
+      ctx.save();
+      for (const p of ev.particles) {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    } else if (ev.type === "rain") {
+      // Gouttes diagonales : courtes lignes inclinées
+      ctx.save();
+      ctx.strokeStyle = "rgba(180, 220, 245, 0.65)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const p of ev.particles) {
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - 2, p.y + p.length);
+      }
+      ctx.stroke();
       ctx.restore();
     }
   }
@@ -6120,6 +6299,12 @@ function resetGame() {
   game.attackFx = [];
   game.projectiles = [];
   game.flashes = [];
+  // Ambient anims : reset active events + premier spawn dans 8-15s
+  // (court pour que le joueur voie l'effet rapidement après le start)
+  game.ambientAnims = {
+    active: [],
+    nextSpawnAt: 8 + Math.random() * 7,
+  };
   game.explosions = [];
   game.lightning = null;
   game.lightningCooldown = 0;
