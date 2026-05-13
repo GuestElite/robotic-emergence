@@ -42,11 +42,12 @@ const RE_AUTH = {
       p_turrets_built: payload.turretsBuilt || 0,
       p_lightning_used:payload.lightningUsed || 0,
       p_mode:          payload.mode === "mp" ? "mp" : "solo",
+      p_lobby_id:      payload.lobbyId || null,
     });
     if (error || !data?.ok) return { ok: false, error: error?.message || data?.error };
     // Met à jour le solde local
     if (this.profile) this.profile.currency += data.reward;
-    return { ok: true, reward: data.reward, resultId: data.result_id };
+    return { ok: true, reward: data.reward, resultId: data.result_id, eloDelta: data.elo_delta || 0, mode: data.mode };
   },
 };
 

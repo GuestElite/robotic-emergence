@@ -1621,6 +1621,8 @@ function notifyGameOver(winnerSide) {
 // Le snapshot de stats utilisé est celui du côté que le joueur a réellement contrôlé
 // (mySide()) — important en MP où le guest pilote le côté "enemy".
 async function sendGameResultToBackend(result) {
+  // En spectateur on n'enregistre rien (on n'a pas joué).
+  if (game.mode === "mp" && game.mp?.role === "spectator") return;
   if (!window.RE_AUTH || !window.RE_AUTH.session) return;
   const ps = game.stats[mySide()] || game.stats.player;
   const payload = {
@@ -1634,11 +1636,13 @@ async function sendGameResultToBackend(result) {
     turretsBuilt:  ps.turretsBuilt,
     lightningUsed: ps.lightningsUsed,
     mode:          game.mode === "mp" ? "mp" : "solo",
+    lobbyId:       game.mp?.lobbyId || null,
   };
   try {
     const res = await window.RE_AUTH.finishGame(payload);
     if (res?.ok && game.gameOver) {
       game.gameOver.reward = res.reward;
+      if (typeof res.eloDelta === "number") game.gameOver.eloDelta = res.eloDelta;
     }
   } catch (e) {
     console.warn("[RE] finishGame failed:", e);
@@ -1731,10 +1735,10 @@ function update(dt) {
     }
     return;
   }
-  // Le guest en MP n'est qu'un client de rendu — toute la simulation est
-  // calculée par le host, qui envoie des snapshots via Realtime broadcast.
-  const isGuest = game.mode === "mp" && game.mp?.role === "guest";
-  if (isGuest) {
+  // Le guest et le spectateur en MP n'ont pas de simulation locale — ils
+  // reçoivent un snapshot du host via broadcast et se contentent de rendre.
+  const isViewer = game.mode === "mp" && (game.mp?.role === "guest" || game.mp?.role === "spectator");
+  if (isViewer) {
     // On laisse juste tourner la caméra et la mise à jour de la souris,
     // les structures (units, factories, etc.) sont écrasées par les snapshots reçus.
     updateCamera(dt);
@@ -1913,6 +1917,9 @@ function render(ctx) {
   drawUpgradePanel(ctx);
   drawSettingsPanel(ctx);
   if (game.mode === "mp") drawInGameChat(ctx);
+  if (game.mode === "mp") drawEmoteOverlay(ctx);
+  if (game.mode === "mp" && game.ui.emoteMenuOpen) drawEmoteRadial(ctx);
+  if (game.tutorial?.active) drawTutorialOverlay(ctx);
   if (game.gameOver) drawGameOverOverlay(ctx);
 }
 
@@ -3843,6 +3850,22 @@ function drawMenu(ctx) {
   drawPlayBtn(playRect, "▶  SOLO", "Joue contre un bot", COLORS.player, COLORS.playerDark);
   drawPlayBtn(playMpRect, "👥  MULTIJOUEUR", "Affronte un autre joueur", COLORS.enemy, COLORS.enemyDark || "rgba(220,38,38,0.4)");
 
+  // Bouton Tutoriel (sous les 2 boutons play)
+  const tutoW = 280, tutoH = 36;
+  const tutoRect = { x: cx - tutoW / 2, y: playY + playH + 12, w: tutoW, h: tutoH };
+  const tutoHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, tutoRect);
+  ctx.fillStyle = tutoHover ? "rgba(34, 197, 94, 0.45)" : "rgba(34, 197, 94, 0.22)";
+  roundedRect(ctx, tutoRect.x, tutoRect.y, tutoRect.w, tutoRect.h, 8);
+  ctx.fill();
+  ctx.strokeStyle = COLORS.hpGood;
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("📘  Tutoriel (1ère partie)", tutoRect.x + tutoRect.w / 2, tutoRect.y + tutoRect.h / 2);
+
   // ── SETTINGS AUDIO ──
   ctx.fillStyle = COLORS.hudText;
   ctx.font = "bold 14px -apple-system, sans-serif";
@@ -3883,6 +3906,7 @@ function drawMenu(ctx) {
     ? [
         { label: "🛍️ Boutique", url: "/shop/" },
         { label: "🎯 Missions", url: "/missions/" },
+        { label: "🏆 Classement", url: "/leaderboard/" },
         { label: "👤 Profil",   url: "/profile/" },
         ...(profile.is_admin ? [{ label: "⚙️ Admin", url: "/admin/" }] : []),
         { label: "↪ Déconnexion", action: "signout" },
@@ -3923,7 +3947,7 @@ function drawMenu(ctx) {
   ctx.textBaseline = "alphabetic";
   ctx.fillText("github.com/GuestElite/robotic-emergence", cx, CONFIG.H - 12);
 
-  game.ui.menuRects = { diff: diffRects, biome: biomeRects, play: playRect, playMp: playMpRect, music: musicRect, sfx: sfxRect, links: linkRects };
+  game.ui.menuRects = { diff: diffRects, biome: biomeRects, play: playRect, playMp: playMpRect, tutorial: tutoRect, music: musicRect, sfx: sfxRect, links: linkRects };
 }
 
 function drawToggleButton(ctx, rect, label, on) {
@@ -3970,18 +3994,36 @@ function drawGameOverOverlay(ctx) {
   ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
   ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
 
-  const win = game.gameOver.winner === mySide();
-  const title = win ? "VICTOIRE !" : "DÉFAITE";
-  let subtitle = win
-    ? "La base adverse est tombée."
-    : "Ta base a été détruite.";
+  const isSpec = game.mode === "mp" && game.mp?.role === "spectator";
+  const winnerSide = game.gameOver.winner;
+  const win = !isSpec && winnerSide === mySide();
+  let title, subtitle;
+  if (isSpec) {
+    const winnerName = winnerSide === "player"
+      ? (game.mp?.hostUsername  || "Hôte")
+      : (game.mp?.guestUsername || "Invité");
+    title = "FIN DE PARTIE";
+    subtitle = `${winnerName} a remporté la partie.`;
+  } else {
+    title = win ? "VICTOIRE !" : "DÉFAITE";
+    subtitle = win ? "La base adverse est tombée." : "Ta base a été détruite.";
+  }
   if (game.gameOver.reason === "opponent_left") {
     subtitle = "L'adversaire a quitté la partie.";
+  } else if (game.gameOver.reason === "surrender") {
+    subtitle = win
+      ? "L'adversaire a abandonné."
+      : "Tu as abandonné la partie.";
   }
   // Récompense Supabase si dispo
-  if (game.gameOver.reward != null) {
+  if (!isSpec && game.gameOver.reward != null) {
     subtitle += `  · +${game.gameOver.reward} 💰 ajoutés à ton solde`;
-  } else if (!window.RE_AUTH?.session) {
+    if (game.mode === "mp" && typeof game.gameOver.eloDelta === "number" && game.gameOver.eloDelta !== 0) {
+      const delta = game.gameOver.eloDelta;
+      const sign = delta > 0 ? "+" : "";
+      subtitle += `  ·  ELO ${sign}${delta}`;
+    }
+  } else if (!isSpec && !window.RE_AUTH?.session) {
     subtitle += "  · (invité — aucune monnaie attribuée)";
   }
 
@@ -4155,6 +4197,7 @@ function drawHUD(ctx) {
   drawBuildButtons(ctx);
   drawLightningButton(ctx);
   drawSettingsButton(ctx);
+  drawSurrenderButton(ctx);
 
   // Argent de l'adversaire (droite). En MP on ajoute son pseudo.
   ctx.fillStyle = oppForHud === "player" ? COLORS.player : COLORS.enemy;
@@ -4347,6 +4390,79 @@ function drawBuildButtonTooltip(ctx, btn) {
     ctx.fillText(r.value, x + boxW - padX, cy);
   }
   ctx.restore();
+}
+
+// Bouton Abandonner — visible uniquement en MP host/guest pendant la partie.
+// Le spectateur a un bouton "Quitter" plutôt qu'un abandon.
+function drawSurrenderButton(ctx) {
+  if (game.mode !== "mp") { game.ui.surrenderBtn = null; game.ui.spectatorLeaveBtn = null; return; }
+  const isSpec = game.mp?.role === "spectator";
+  const btnX = CONFIG.CANVAS_W - 16 - 110;
+  const btnY = CONFIG.HUD_H + 8;
+  const btnW = 110;
+  const btnH = 26;
+  const rect = { x: btnX, y: btnY, w: btnW, h: btnH };
+  const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+  const armed = !isSpec && game.ui.surrenderArmedAt && (performance.now() - game.ui.surrenderArmedAt < 3000);
+  ctx.save();
+  if (armed) {
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 180);
+    ctx.fillStyle = `rgba(239,68,68,${(0.55 + 0.35 * pulse).toFixed(3)})`;
+    ctx.shadowColor = COLORS.enemy;
+    ctx.shadowBlur = 10 + 6 * pulse;
+  } else {
+    ctx.fillStyle = hover ? "rgba(239,68,68,0.55)" : "rgba(239,68,68,0.22)";
+  }
+  roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 6);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = COLORS.enemy;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  let label;
+  if (isSpec) label = "↩ Quitter";
+  else if (armed) label = "⚠ Confirmer ?";
+  else label = "🏳️ Abandonner";
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+  ctx.restore();
+  if (isSpec) { game.ui.spectatorLeaveBtn = rect; game.ui.surrenderBtn = null; }
+  else { game.ui.surrenderBtn = rect; game.ui.spectatorLeaveBtn = null; }
+
+  // Bandeau "Mode Spectateur" sous le bouton si applicable
+  if (isSpec) {
+    ctx.save();
+    ctx.fillStyle = "rgba(168,85,247,0.85)";
+    ctx.font = "bold 11px -apple-system, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText("👁  MODE SPECTATEUR", rect.x + rect.w, rect.y + rect.h + 14);
+    ctx.restore();
+  }
+}
+
+async function trySurrender() {
+  if (!window.RE_MP || game.mode !== "mp") return;
+  if (game.gameOver) return;
+  // Confirmation simple via un flag : 1er clic arme, 2e confirme dans les 3s.
+  const now = performance.now();
+  if (!game.ui.surrenderArmedAt || now - game.ui.surrenderArmedAt > 3000) {
+    game.ui.surrenderArmedAt = now;
+    flashLobbyMessage("");
+    // Affiche un message visuel temporaire
+    return;
+  }
+  game.ui.surrenderArmedAt = 0;
+  const res = await window.RE_MP.surrender();
+  if (res?.error) {
+    console.warn("[surrender]", res.error);
+    return;
+  }
+  // Le RPC marque le lobby finished. Le snapshot/gameover broadcast arrivera
+  // mais on déclenche aussi localement pour réactivité.
+  handleMpGameOver({ winnerSide: res.winnerSide || "enemy", reason: "surrender" });
 }
 
 function drawSettingsButton(ctx) {
@@ -4801,6 +4917,12 @@ function setupInput(canvas) {
         startMultiplayer();
         return;
       }
+      // Tutoriel
+      if (mr.tutorial && pointInRect(sx, sy, mr.tutorial)) {
+        audio.playSFX("click");
+        startTutorial();
+        return;
+      }
       return;
     }
 
@@ -4843,6 +4965,15 @@ function setupInput(canvas) {
             if (pointInRect(sx, sy, item.rect) && item.code) {
               audio.playSFX("click");
               mpJoinByCode(item.code);
+              return;
+            }
+          }
+        }
+        if (Array.isArray(lr.spectateItems)) {
+          for (const item of lr.spectateItems) {
+            if (pointInRect(sx, sy, item.rect) && item.lobby) {
+              audio.playSFX("click");
+              spectateLobby(item.lobby);
               return;
             }
           }
@@ -5012,10 +5143,62 @@ function setupInput(canvas) {
       return;
     }
 
+    // Tutoriel : intercepter clic sur Suivant / Passer
+    if (game.tutorial?.active && game.ui.tutorialRects) {
+      const tr = game.ui.tutorialRects;
+      if (tr.next && pointInRect(sx, sy, tr.next)) {
+        audio.playSFX("click");
+        if (game.tutorial.step >= TUTORIAL_STEPS.length - 1) {
+          game.tutorial.active = false;
+        } else {
+          game.tutorial.step++;
+        }
+        return;
+      }
+      if (tr.skip && pointInRect(sx, sy, tr.skip)) {
+        audio.playSFX("click");
+        game.tutorial.active = false;
+        return;
+      }
+    }
+
     // 1) Bouton Éclair (coords ÉCRAN) ? → toggle du mode visée
     if (game.ui.lightningBtn && pointInRect(sx, sy, game.ui.lightningBtn)) {
       toggleLightningAim();
       audio.playSFX("click");
+      return;
+    }
+
+    // 1ter) Bouton Abandonner (MP host/guest) ou Quitter (spectateur)
+    if (game.ui.surrenderBtn && pointInRect(sx, sy, game.ui.surrenderBtn)) {
+      audio.playSFX("click");
+      trySurrender();
+      return;
+    }
+    if (game.ui.spectatorLeaveBtn && pointInRect(sx, sy, game.ui.spectatorLeaveBtn)) {
+      audio.playSFX("click");
+      goToMenu();
+      return;
+    }
+    // Menu radial d'emotes ouvert : clic sur un emote → envoi, clic ailleurs → ferme.
+    if (game.ui.emoteMenuOpen) {
+      const rects = game.ui.emoteRects || [];
+      for (const r of rects) {
+        if (Math.hypot(sx - r.cx, sy - r.cy) <= r.r) {
+          sendEmote(r.emote.id);
+          return;
+        }
+      }
+      game.ui.emoteMenuOpen = false;
+      return;
+    }
+    // Le spectateur peut ouvrir/fermer panneaux de lecture, settings, chat,
+    // mais ne tire pas, ne place pas, ne sélectionne pas de build.
+    const isSpectatorClick = game.mode === "mp" && game.mp?.role === "spectator";
+
+    if (isSpectatorClick) {
+      // En spectateur on bloque toutes les actions de jeu sauf les panneaux
+      // d'info — on laisse tomber le reste du handler ici.
       return;
     }
 
@@ -5194,6 +5377,22 @@ function setupInput(canvas) {
       if (evt.key === "Escape" || evt.key === "m") goToMenu();
       return;
     }
+    // Menu radial emotes (MP) : V ouvre, Échap ou clic ferme, 1-6 envoie direct.
+    if (game.mode === "mp" && game.ui.emoteMenuOpen) {
+      if (evt.key === "Escape") { game.ui.emoteMenuOpen = false; return; }
+      const n = parseInt(evt.key, 10);
+      if (n >= 1 && n <= EMOTES.length) {
+        sendEmote(EMOTES[n - 1].id);
+        return;
+      }
+      return;
+    }
+    if (game.mode === "mp" && !game.gameOver && (evt.key === "v" || evt.key === "V")) {
+      game.ui.emoteMenuOpen = true;
+      evt.preventDefault();
+      return;
+    }
+
     // Chat in-game (MP) : T pour ouvrir, capture clavier quand actif.
     if (game.mode === "mp" && game.ui.chatActive) {
       if (evt.key === "Escape") { game.ui.chatActive = false; game.ui.chatInput = ""; return; }
@@ -5291,6 +5490,128 @@ function resetGame() {
   buildSlots();
 }
 
+// 6 étapes simples pour la 1ère partie d'un nouveau joueur. Tu cliques sur
+// "Compris !" pour passer à la suivante (pas de détection d'action automatique
+// pour rester simple). Le panneau reste affiché en haut de l'écran.
+const TUTORIAL_STEPS = [
+  {
+    title: "Bienvenue sur Émergence !",
+    body: "Tu pilotes une équipe de robots (à gauche). Ton but : détruire la base ennemie (à droite). Tes unités sortent toutes seules de tes usines.",
+  },
+  {
+    title: "Pose ta première usine",
+    body: "En haut, choisis une 🏭 Légère (touche 1), puis clique sur un emplacement vide à gauche pour la poser. Les usines coûtent de l'argent, affiché en haut à gauche.",
+  },
+  {
+    title: "Améliore tes usines",
+    body: "Clique sur une usine que tu as posée pour ouvrir son panneau d'upgrade : dégâts, vitesse, PV, etc. Plus tu améliores, plus tes unités sont fortes.",
+  },
+  {
+    title: "Défends-toi avec des tourelles",
+    body: "Sélectionne 🗼 Turret (touche 6) et clique sur ton rempart pour poser une tourelle qui tire automatiquement sur les ennemis qui approchent.",
+  },
+  {
+    title: "Lance l'éclair quand ça chauffe ⚡",
+    body: "Le bouton ⚡ Éclair (touche L) te permet de tirer une frappe verticale qui tue toutes les unités sur une bande. Cooldown de 30s.",
+  },
+  {
+    title: "Bonne chance !",
+    body: "Pour gagner, fais tomber la base ennemie à 0 PV. Pour gagner de la monnaie et débloquer des skins/missions, connecte-toi via le menu. Ferme ce tutoriel et joue !",
+  },
+];
+
+function startTutorial() {
+  if (game.mp && window.RE_MP) { try { window.RE_MP.leave(); } catch {} }
+  game.mp = null;
+  game.mode = "solo";
+  game.tutorial = { step: 0, active: true };
+  // Difficulté facile + bonus d'argent côté joueur
+  game.difficulty = "easy";
+  game.preset = { ...DIFFICULTY_PRESETS.easy };
+  game.preset.playerStartMoney = Math.max(game.preset.playerStartMoney, 300);
+  applyTeamSkin();
+  resetGame();
+  game.screen = "playing";
+  saveSettings();
+  audio.startMusic();
+}
+
+// Overlay banner du tutoriel — affiché en bas-milieu de l'écran pour ne pas
+// gêner le HUD du haut. Cliquer sur "Compris !" avance à l'étape suivante.
+function drawTutorialOverlay(ctx) {
+  if (!game.tutorial?.active) { game.ui.tutorialRects = null; return; }
+  const step = TUTORIAL_STEPS[game.tutorial.step];
+  if (!step) { game.tutorial.active = false; return; }
+
+  const W = 720, H = 130;
+  const x = (CONFIG.CANVAS_W - W) / 2;
+  const y = CONFIG.H - H - 24;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(15,23,42,0.94)";
+  roundedRect(ctx, x, y, W, H, 12);
+  ctx.fill();
+  ctx.strokeStyle = COLORS.hpGood;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Compteur d'étapes en haut-gauche
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "bold 11px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`TUTORIEL  ·  Étape ${game.tutorial.step + 1} / ${TUTORIAL_STEPS.length}`, x + 16, y + 12);
+
+  // Titre
+  ctx.fillStyle = COLORS.hpGood;
+  ctx.font = "bold 18px -apple-system, sans-serif";
+  ctx.fillText(step.title, x + 16, y + 32);
+
+  // Corps (wrapping)
+  ctx.fillStyle = "#fff";
+  ctx.font = "13px -apple-system, sans-serif";
+  const lines = wrapTextToLines(ctx, step.body, W - 32 - 160);
+  let cy = y + 60;
+  for (const ln of lines.slice(0, 4)) {
+    ctx.fillText(ln, x + 16, cy);
+    cy += 16;
+  }
+
+  // Boutons : Suivant + Skip
+  const isLast = game.tutorial.step >= TUTORIAL_STEPS.length - 1;
+  const btnW = 130, btnH = 36;
+  const nextRect = { x: x + W - btnW - 16, y: y + H - btnH - 14, w: btnW, h: btnH };
+  const skipRect = { x: x + W - btnW * 2 - 24, y: y + H - btnH - 14, w: btnW, h: btnH };
+
+  const nextHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, nextRect);
+  ctx.fillStyle = nextHover ? COLORS.player : COLORS.playerDark;
+  roundedRect(ctx, nextRect.x, nextRect.y, nextRect.w, nextRect.h, 8);
+  ctx.fill();
+  ctx.strokeStyle = COLORS.player;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(isLast ? "Fermer le tutoriel" : "Compris ! ▶", nextRect.x + nextRect.w / 2, nextRect.y + nextRect.h / 2);
+
+  if (!isLast) {
+    const skipHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, skipRect);
+    ctx.fillStyle = skipHover ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
+    roundedRect(ctx, skipRect.x, skipRect.y, skipRect.w, skipRect.h, 8);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.25)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.fillText("Passer", skipRect.x + skipRect.w / 2, skipRect.y + skipRect.h / 2);
+  }
+
+  ctx.restore();
+  game.ui.tutorialRects = { next: nextRect, skip: isLast ? null : skipRect };
+}
+
 function startGame(difficulty) {
   if (DIFFICULTY_PRESETS[difficulty]) {
     game.difficulty = difficulty;
@@ -5321,9 +5642,12 @@ function goToMenu() {
     game.mp = null;
   }
   game.mode = "solo";
+  game.tutorial = null;
   game.ui.chatActive = false;
   game.ui.chatInput = "";
   game.ui.chatMessages = [];
+  game.ui.emoteMenuOpen = false;
+  game.ui.emoteEvents = [];
 }
 
 // -------------------------------------------------------------
@@ -5375,10 +5699,35 @@ function startMultiplayer() {
     window.RE_MP.onLobbyUpdate(handleMpLobbyUpdate);
     window.RE_MP.onStart(handleMpStart);
     window.RE_MP.onChat(handleMpChat);
+    window.RE_MP.onEmote(handleMpEmote);
     game.mp.subscribed = true;
   }
   // Démarre la première récupération de la liste des salons publics.
   refreshPublicLobbies();
+}
+
+async function spectateLobby(lobbyMeta) {
+  if (!window.RE_MP || !lobbyMeta?.lobby_id) return;
+  flashLobbyMessage("Connexion au flux…");
+  const res = await window.RE_MP.joinAsSpectator(lobbyMeta.lobby_id, { meta: lobbyMeta });
+  if (res?.error) {
+    flashLobbyMessage(`Erreur : ${res.error}`, "error");
+    return;
+  }
+  game.mp.role = "spectator";
+  game.mp.lobbyId = res.lobbyId;
+  game.mp.opponent = null;
+  game.mp.status = "playing";
+  game.mp.seed = res.seed;
+  game.biome = res.biome || game.biome;
+  game.difficulty = res.difficulty || game.difficulty;
+  if (DIFFICULTY_PRESETS[game.difficulty]) game.preset = DIFFICULTY_PRESETS[game.difficulty];
+  game.mp.hostUsername  = res.host_username;
+  game.mp.guestUsername = res.guest_username;
+  applyTeamSkin();
+  resetGame();
+  game.screen = "playing";
+  audio.startMusic();
 }
 
 async function refreshPublicLobbies() {
@@ -5393,6 +5742,29 @@ async function refreshPublicLobbies() {
     }
   } catch {}
   game.ui.publicLobbiesLoading = false;
+}
+
+// 6 emotes disponibles via le menu radial (touche V en MP)
+const EMOTES = [
+  { id: "gg",      icon: "👏", label: "GG" },
+  { id: "bravo",   icon: "🤝", label: "Bien joué" },
+  { id: "attack",  icon: "⚔️", label: "Attaque !" },
+  { id: "defend",  icon: "🛡️", label: "Défense !" },
+  { id: "oops",    icon: "😅", label: "Oups…" },
+  { id: "hello",   icon: "👋", label: "Salut" },
+];
+
+function handleMpEmote(payload) {
+  if (!payload) return;
+  if (!game.ui.emoteEvents) game.ui.emoteEvents = [];
+  game.ui.emoteEvents.push({
+    id: payload.emote,
+    username: payload.username || "?",
+    from: payload.from || "?",
+    self: !!payload.self,
+    ts: performance.now(),
+  });
+  if (game.ui.emoteEvents.length > 8) game.ui.emoteEvents.shift();
 }
 
 function handleMpChat(payload) {
@@ -5720,17 +6092,19 @@ function drawLobbyChoice(ctx) {
   ctx.fillText(`PARTIES EN COURS (${playing.length})`, rightX, curY);
   curY += 16;
 
+  const spectateRects = [];
   if (playing.length === 0) {
     ctx.fillStyle = COLORS.hudMuted;
     ctx.font = "12px -apple-system, sans-serif";
     ctx.fillText("Aucune partie en cours.", rightX, curY + 16);
   } else {
     for (const l of playing.slice(0, 4)) {
-      const rect = { x: rightX, y: curY, w: rightW, h: 34 };
-      ctx.fillStyle = "rgba(34,197,94,0.10)";
+      const rect = { x: rightX, y: curY, w: rightW, h: 40 };
+      const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+      ctx.fillStyle = hover ? "rgba(168,85,247,0.18)" : "rgba(34,197,94,0.10)";
       roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 6);
       ctx.fill();
-      ctx.strokeStyle = "rgba(34,197,94,0.35)";
+      ctx.strokeStyle = hover ? "rgba(168,85,247,0.55)" : "rgba(34,197,94,0.35)";
       ctx.lineWidth = 1;
       ctx.stroke();
 
@@ -5738,19 +6112,31 @@ function drawLobbyChoice(ctx) {
       ctx.font = "bold 12px -apple-system, sans-serif";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillText(`${l.host_username || "?"} vs ${l.guest_username || "?"}`, rect.x + 12, rect.y + rect.h / 2 - 7);
+      ctx.fillText(`${l.host_username || "?"} vs ${l.guest_username || "?"}`, rect.x + 12, rect.y + rect.h / 2 - 8);
       ctx.fillStyle = COLORS.hudMuted;
       ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
       const since = l.started_at ? Math.floor((Date.now() - new Date(l.started_at).getTime()) / 1000) : 0;
       const minS = Math.floor(since / 60).toString().padStart(2, "0");
       const secS = (since % 60).toString().padStart(2, "0");
-      ctx.fillText(`${BIOME_LABELS[l.biome] || l.biome}  ·  ${DIFFICULTY_PRESETS[l.difficulty]?.label || l.difficulty}  ·  ${minS}:${secS}`, rect.x + 12, rect.y + rect.h / 2 + 7);
+      ctx.fillText(`${BIOME_LABELS[l.biome] || l.biome}  ·  ${DIFFICULTY_PRESETS[l.difficulty]?.label || l.difficulty}  ·  ${minS}:${secS}`, rect.x + 12, rect.y + rect.h / 2 + 8);
 
-      curY += 34 + 4;
+      // CTA spectateur
+      const ctaW = 90, ctaH = 26;
+      const cta = { x: rect.x + rect.w - ctaW - 8, y: rect.y + (rect.h - ctaH) / 2, w: ctaW, h: ctaH };
+      ctx.fillStyle = hover ? "rgba(168,85,247,0.85)" : "rgba(168,85,247,0.45)";
+      roundedRect(ctx, cta.x, cta.y, cta.w, cta.h, 5);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 11px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("👁 Regarder", cta.x + cta.w / 2, cta.y + cta.h / 2);
+
+      spectateRects.push({ rect, lobby: l });
+      curY += 40 + 4;
     }
   }
 
-  game.ui.lobbyRects = { choiceCreatePublic: createPubRect, choiceCreatePrivate: createPrivRect, choiceJoin: joinRect, back: backRect, refresh: refreshRect, publicItems: itemRects };
+  game.ui.lobbyRects = { choiceCreatePublic: createPubRect, choiceCreatePrivate: createPrivRect, choiceJoin: joinRect, back: backRect, refresh: refreshRect, publicItems: itemRects, spectateItems: spectateRects };
 }
 
 function drawLobbyJoin(ctx) {
@@ -6172,6 +6558,104 @@ function drawInGameChat(ctx) {
   ctx.restore();
 }
 
+// Affiche les emotes reçues en haut-droite, chacune s'estompe sur 3 s.
+function drawEmoteOverlay(ctx) {
+  const events = game.ui.emoteEvents || [];
+  const now = performance.now();
+  const visible = events.filter((e) => now - e.ts < 3500);
+  game.ui.emoteEvents = visible; // cleanup léger
+  const baseX = CONFIG.CANVAS_W - 220;
+  let cy = CONFIG.HUD_H + 14;
+  ctx.save();
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  for (const e of visible.slice(-5)) {
+    const age = now - e.ts;
+    const alpha = age < 2500 ? 1 : Math.max(0, 1 - (age - 2500) / 1000);
+    const def = EMOTES.find((x) => x.id === e.id) || { icon: "❓", label: e.id };
+    const w = 200, h = 38;
+    ctx.fillStyle = `rgba(0,0,0,${(0.6 * alpha).toFixed(3)})`;
+    roundedRect(ctx, baseX, cy, w, h, 8);
+    ctx.fill();
+    ctx.fillStyle = `rgba(255,255,255,${alpha.toFixed(3)})`;
+    ctx.font = "22px -apple-system, sans-serif";
+    ctx.fillText(def.icon, baseX + 12, cy + h / 2);
+    ctx.font = "bold 13px -apple-system, sans-serif";
+    ctx.fillText(def.label, baseX + 48, cy + h / 2 - 7);
+    const isMine = e.self || (game.mp?.role && e.from === game.mp.role);
+    ctx.fillStyle = `rgba(${isMine ? "187,247,208" : e.from === "host" ? "59,130,246" : "239,68,68"},${alpha.toFixed(3)})`;
+    ctx.font = "11px -apple-system, sans-serif";
+    ctx.fillText(e.username, baseX + 48, cy + h / 2 + 8);
+    cy += h + 6;
+  }
+  ctx.restore();
+}
+
+// Roue d'emotes — affichée quand on appuie sur V (et ne se ferme qu'après envoi
+// ou Échap). 6 emotes disposés en cercle autour du centre de l'écran.
+function drawEmoteRadial(ctx) {
+  const cx = CONFIG.CANVAS_W / 2;
+  const cy = CONFIG.H / 2;
+  const radius = 130;
+  const itemR = 56;
+  const mx = game.ui.mouseScreen.x, my = game.ui.mouseScreen.y;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+
+  ctx.fillStyle = "rgba(15,23,42,0.85)";
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius - itemR / 2 - 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.20)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Choisis une emote", cx, cy - 14);
+  ctx.fillStyle = "rgba(255,255,255,0.5)";
+  ctx.font = "11px -apple-system, sans-serif";
+  ctx.fillText("Échap pour annuler · 1-6 pour envoyer directement", cx, cy + 10);
+
+  const rects = [];
+  for (let i = 0; i < EMOTES.length; i++) {
+    const angle = -Math.PI / 2 + (i / EMOTES.length) * Math.PI * 2;
+    const x = cx + Math.cos(angle) * radius;
+    const y = cy + Math.sin(angle) * radius;
+    const r = { x: x - itemR / 2, y: y - itemR / 2, w: itemR, h: itemR };
+    const hover = Math.hypot(mx - x, my - y) < itemR / 2;
+    ctx.fillStyle = hover ? "rgba(168,85,247,0.55)" : "rgba(255,255,255,0.10)";
+    ctx.beginPath();
+    ctx.arc(x, y, itemR / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = hover ? "#a855f7" : "rgba(255,255,255,0.25)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.font = "26px -apple-system, sans-serif";
+    ctx.fillText(EMOTES[i].icon, x, y - 5);
+    ctx.font = "bold 9px -apple-system, sans-serif";
+    ctx.fillText(EMOTES[i].label, x, y + 16);
+    // Touche raccourci
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.font = "bold 10px ui-monospace, monospace";
+    ctx.fillText(`${i + 1}`, x, y - itemR / 2 - 8);
+    rects.push({ rect: r, cx: x, cy: y, r: itemR / 2, emote: EMOTES[i] });
+  }
+  game.ui.emoteRects = rects;
+  ctx.restore();
+}
+
+function sendEmote(emoteId) {
+  if (!window.RE_MP) return;
+  window.RE_MP.sendEmote(emoteId);
+  game.ui.emoteMenuOpen = false;
+}
+
 function sendCurrentChat() {
   const txt = (game.ui.chatInput || "").trim();
   if (!txt) return;
@@ -6318,7 +6802,9 @@ function applySerializedSide(side, ser) {
 }
 
 function applyMpSnapshot(snap) {
-  if (!snap || game.mode !== "mp" || game.mp?.role !== "guest") return;
+  if (!snap || game.mode !== "mp") return;
+  // Le host génère les snapshots, il ne les ré-applique pas.
+  if (game.mp?.role === "host") return;
   if (game.screen !== "playing") {
     // Le host a démarré la partie avant que le guest n'ait fini son setup local
     startMpGame();
@@ -6374,10 +6860,11 @@ function applyMpSnapshot(snap) {
 // Côté host : applique un input reçu du guest (= actions sur le côté enemy).
 function handleMpInput(input) {
   if (!input || game.mode !== "mp") return;
-  // Le host est seul à traiter les inputs (le guest n'a pas de simulation locale).
   if (game.mp?.role !== "host") return;
   if (game.screen !== "playing") return;
   if (game.gameOver) return;
+  // Seuls les inputs envoyés par le guest sont autorisés (ignore spectateurs).
+  if (input.from && input.from !== "guest") return;
   const side = "enemy"; // le guest ne peut piloter que son côté
 
   switch (input.type) {

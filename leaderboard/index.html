@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Classement — Robotic Emergence</title>
+  <link rel="stylesheet" href="/lib/theme.css" />
+  <style>
+    table.leaderboard {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      background: rgba(255,255,255,0.02);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    table.leaderboard th, table.leaderboard td {
+      padding: 10px 14px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      font-size: 14px;
+    }
+    table.leaderboard th {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.04);
+    }
+    table.leaderboard tr.me {
+      background: rgba(59, 130, 246, 0.10);
+    }
+    table.leaderboard td.rank {
+      font-weight: 700;
+      width: 60px;
+      color: var(--muted);
+    }
+    table.leaderboard td.rank.top1 { color: #fbbf24; }
+    table.leaderboard td.rank.top2 { color: #d4d4d8; }
+    table.leaderboard td.rank.top3 { color: #f59e0b; }
+    table.leaderboard td.elo {
+      font-weight: 700;
+      color: #fff;
+    }
+    table.leaderboard td.delta-positive { color: #22c55e; }
+    table.leaderboard td.delta-negative { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav">
+      <a href="/prototype/">🎮 Jouer</a>
+      <a href="/shop/">🛍️ Boutique</a>
+      <a href="/missions/">🎯 Missions</a>
+      <a href="/leaderboard/" class="active">🏆 Classement</a>
+      <a href="/profile/">👤 Profil</a>
+      <span class="spacer"></span>
+      <span id="adminLink"></span>
+      <span class="currency-pill" id="currencyPill">— 💰</span>
+      <button class="btn-secondary" id="signoutBtn" style="padding: 6px 12px; font-size: 12px;">Déconnexion</button>
+    </div>
+
+    <h1>🏆 Classement multijoueur</h1>
+    <p class="muted">Top 100 des joueurs classés par ELO. Le classement s'actualise après chaque partie multijoueur.</p>
+
+    <div id="content">
+      <div class="muted small" style="padding: 24px;">Chargement…</div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { supabase, getProfile, requireSession } from "/lib/supabase.js";
+
+    await requireSession("/auth/login.html?next=" + encodeURIComponent(location.pathname));
+    const profile = await getProfile();
+    document.getElementById("currencyPill").textContent = `${profile.currency} 💰`;
+    if (profile.is_admin) {
+      document.getElementById("adminLink").innerHTML = `<a href="/admin/" style="padding:6px 12px; font-size:12px;">⚙️ Admin</a>`;
+    }
+    document.getElementById("signoutBtn").addEventListener("click", async () => {
+      await supabase.auth.signOut();
+      location.href = "/auth/login.html";
+    });
+
+    const { data: rows, error } = await supabase
+      .from("re_leaderboard")
+      .select("*")
+      .order("rank", { ascending: true });
+
+    const container = document.getElementById("content");
+
+    if (error) {
+      container.innerHTML = `<div class="msg msg-error">Erreur : ${error.message}</div>`;
+    } else if (!rows || rows.length === 0) {
+      container.innerHTML = `
+        <div class="muted small" style="padding: 24px; text-align:center;">
+          Personne n'a encore joué de partie multijoueur classée. Sois le premier !
+        </div>`;
+    } else {
+      const myRow = rows.find((r) => r.id === profile.id);
+      const myRank = myRow?.rank;
+
+      const meBlock = myRow
+        ? `
+          <div class="card" style="margin: 12px 0 18px; padding: 14px 18px; border: 1px solid rgba(59,130,246,0.45); background: rgba(59,130,246,0.10);">
+            <div class="row-between">
+              <div>
+                <div class="muted small">Ton classement</div>
+                <div style="font-weight:700; font-size: 16px;">#${myRow.rank}  ·  ${myRow.username}</div>
+              </div>
+              <div style="text-align:right;">
+                <div class="muted small">ELO</div>
+                <div style="font-weight:700; font-size: 22px; color: #fff;">${myRow.elo}</div>
+              </div>
+              <div style="text-align:right;">
+                <div class="muted small">V / D</div>
+                <div style="font-weight:700; font-size: 16px;">${myRow.mp_wins} / ${myRow.mp_losses}</div>
+              </div>
+              <div style="text-align:right;">
+                <div class="muted small">Winrate</div>
+                <div style="font-weight:700; font-size: 16px;">${myRow.winrate}%</div>
+              </div>
+            </div>
+          </div>`
+        : `
+          <div class="card" style="margin: 12px 0 18px; padding: 14px 18px;">
+            <div class="muted small">
+              Tu n'as pas encore joué de partie multijoueur classée. Lance-toi !
+            </div>
+          </div>`;
+
+      const rowsHtml = rows.map((r) => {
+        const isMe = r.id === profile.id;
+        const rankClass = r.rank === 1 ? "top1" : r.rank === 2 ? "top2" : r.rank === 3 ? "top3" : "";
+        return `
+          <tr class="${isMe ? "me" : ""}">
+            <td class="rank ${rankClass}">#${r.rank}</td>
+            <td>${r.username || "—"}</td>
+            <td class="elo">${r.elo}</td>
+            <td>${r.mp_wins}</td>
+            <td>${r.mp_losses}</td>
+            <td>${r.winrate}%</td>
+            <td class="muted">${r.mp_games}</td>
+          </tr>`;
+      }).join("");
+
+      container.innerHTML = `
+        ${meBlock}
+        <table class="leaderboard">
+          <thead>
+            <tr>
+              <th>Rang</th>
+              <th>Joueur</th>
+              <th>ELO</th>
+              <th>Victoires</th>
+              <th>Défaites</th>
+              <th>Winrate</th>
+              <th>Parties</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>`;
+    }
+  </script>
+</body>
+</html>

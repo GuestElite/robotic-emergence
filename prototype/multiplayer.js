@@ -26,6 +26,7 @@ const listeners = {
   lobbyUpdate: new Set(),     // changements de re_lobbies (guest joins, ready flags…)
   start: new Set(),            // les 2 joueurs prêts → partie démarre
   chat: new Set(),             // message texte reçu via broadcast
+  emote: new Set(),            // emote rapide reçue via broadcast
 };
 
 const state = {
@@ -236,6 +237,7 @@ async function setupChannel() {
   ch.on("broadcast", { event: "snapshot" }, ({ payload }) => notify("snapshot", payload));
   ch.on("broadcast", { event: "gameover" }, ({ payload }) => notify("gameOver", payload));
   ch.on("broadcast", { event: "chat" },     ({ payload }) => notify("chat", payload));
+  ch.on("broadcast", { event: "emote" },    ({ payload }) => notify("emote", payload));
   ch.on("broadcast", { event: "hello" },    ({ payload }) => {
     // ping de présence : utile pour que le host sache que le guest est connecté
     if (state.role === "host" && payload?.from === "guest") {
@@ -370,6 +372,77 @@ async function reportFinish(winnerSide) {
   state.status = "finished";
 }
 
+// Abandonne la partie courante. Le RPC marque le lobby finished avec l'AUTRE
+// comme vainqueur ; on diffuse aussi un gameover sur le channel pour que le
+// peer voit l'écran de fin immédiatement.
+async function surrender() {
+  if (!state.lobbyId) return { error: "no_lobby" };
+  try {
+    const { data, error } = await supabase.rpc("re_surrender_lobby", { p_lobby_id: state.lobbyId });
+    if (error) return { error: error.message || "rpc_failed" };
+    const row = Array.isArray(data) ? data[0] : data;
+    const winnerSide = row?.winner_side === "host" ? "player" : "enemy";
+    // Diffuse aux autres (host/guest/spectateurs)
+    if (state.channel) {
+      state.channel.send({ type: "broadcast", event: "gameover", payload: { winnerSide, reason: "surrender", from: state.role } });
+    }
+    return { winnerSide };
+  } catch (err) {
+    return { error: err?.message || "failed" };
+  }
+}
+
+// Rejoint un lobby en tant que spectateur — pas d'écriture côté DB, juste un
+// abonnement au channel broadcast pour recevoir snapshots/chat/emotes.
+async function joinAsSpectator(lobbyId, opts = {}) {
+  await init();
+  if (!lobbyId) return { error: "no_lobby_id" };
+  // Récupère les meta du lobby via la liste publique (RLS-safe)
+  let meta = opts.meta || null;
+  if (!meta) {
+    const { data, error } = await supabase.rpc("re_list_active_lobbies");
+    if (error) return { error: error.message };
+    meta = (data || []).find((l) => l.lobby_id === lobbyId) || null;
+  }
+  if (!meta) return { error: "lobby_not_found" };
+  if (meta.status !== "playing") return { error: "not_playing" };
+
+  state.lobbyId = lobbyId;
+  state.code = meta.code || null;
+  state.role = "spectator";
+  state.opponent = null;
+  state.status = "playing";
+  state.hostReady = true;
+  state.guestReady = true;
+  state.startFired = true;
+  state.seed = Number(meta.seed) || 0;
+  state.biome = meta.biome || "desert";
+  state.difficulty = meta.difficulty || "normal";
+
+  await setupChannel();
+  return {
+    lobbyId,
+    role: "spectator",
+    biome: state.biome,
+    difficulty: state.difficulty,
+    seed: state.seed,
+    host_username: meta.host_username,
+    guest_username: meta.guest_username,
+  };
+}
+
+function sendEmote(emoteId) {
+  if (!state.channel || !emoteId) return;
+  const payload = {
+    emote: String(emoteId).slice(0, 16),
+    username: state.me?.username || "anonyme",
+    from: state.role,
+    ts: Date.now(),
+  };
+  state.channel.send({ type: "broadcast", event: "emote", payload });
+  notify("emote", { ...payload, self: true });
+}
+
 function on(event, cb) { listeners[event]?.add(cb); return () => listeners[event]?.delete(cb); }
 
 const RE_MP = {
@@ -377,13 +450,16 @@ const RE_MP = {
   init,
   createLobby,
   joinByCode,
+  joinAsSpectator,
   setReady,
   listActiveLobbies,
+  surrender,
   leave,
   sendInput,
   sendSnapshot,
   sendGameOver,
   sendChat,
+  sendEmote,
   reportFinish,
   onInput:         (cb) => on("input", cb),
   onSnapshot:      (cb) => on("snapshot", cb),
@@ -392,6 +468,7 @@ const RE_MP = {
   onLobbyUpdate:   (cb) => on("lobbyUpdate", cb),
   onStart:         (cb) => on("start", cb),
   onChat:          (cb) => on("chat", cb),
+  onEmote:         (cb) => on("emote", cb),
 };
 
 window.RE_MP = RE_MP;
