@@ -5,6 +5,118 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Boutique — Robotic Emergence</title>
   <link rel="stylesheet" href="/lib/theme.css" />
+  <style>
+    /* Onglets boutique */
+    .shop-tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      margin: 20px 0 24px;
+    }
+    .shop-tab {
+      padding: 10px 18px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 14px;
+      transition: color 0.18s, border-color 0.18s;
+    }
+    .shop-tab:hover { color: var(--text); }
+    .shop-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .shop-panel { display: none; }
+    .shop-panel.active { display: block; }
+
+    /* Section par unité dans l'onglet "Skins d'unité" */
+    .unit-section { margin-bottom: 32px; }
+    .unit-section h2 {
+      font-size: 18px;
+      margin: 0 0 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .unit-icon {
+      width: 28px;
+      height: 28px;
+      image-rendering: pixelated;
+      object-fit: contain;
+    }
+    .unit-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 16px;
+    }
+
+    /* Carte de skin unité (sprite preview au lieu de swatch) */
+    .unit-skin-card { padding: 16px; text-align: center; }
+    .unit-skin-preview {
+      width: 100%;
+      aspect-ratio: 1;
+      border-radius: 14px;
+      margin-bottom: 12px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.40),
+                  inset 0 1px 0 rgba(255, 255, 255, 0.10);
+      position: relative;
+      overflow: hidden;
+    }
+    .unit-skin-preview img {
+      width: 75%;
+      height: 75%;
+      object-fit: contain;
+      image-rendering: pixelated;
+      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.4));
+    }
+    .unit-skin-preview .tier-badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      padding: 3px 8px;
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 700;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+    }
+    .unit-skin-card.owned .unit-skin-preview {
+      border: 1px solid rgba(74, 222, 128, 0.55);
+    }
+    .unit-skin-card.active .unit-skin-preview {
+      border: 1px solid var(--warn);
+      box-shadow: 0 8px 32px rgba(251, 191, 36, 0.30);
+    }
+
+    /* Cartes pack : plus large avec aperçu multi-sprites */
+    .pack-card { padding: 18px; grid-column: span 2; }
+    .pack-preview {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      flex-wrap: wrap;
+      padding: 20px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.40),
+                  inset 0 1px 0 rgba(255, 255, 255, 0.10);
+      margin-bottom: 12px;
+    }
+    .pack-preview img {
+      width: 48px;
+      height: 48px;
+      object-fit: contain;
+      image-rendering: pixelated;
+      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+    }
+    @media (max-width: 600px) {
+      .pack-card { grid-column: span 1; }
+    }
+  </style>
 </head>
 <body>
   <div class="wrap">
@@ -21,29 +133,60 @@
       <button class="btn-secondary" id="signoutBtn" style="padding: 6px 12px; font-size: 12px;">Déconnexion</button>
     </div>
 
-    <h1>🛍️ Boutique — couleurs d'équipe</h1>
-    <p class="muted">Achète une couleur puis clique sur « Équiper » pour la voir appliquée à ta team en jeu.</p>
+    <h1>🛍️ Boutique</h1>
+    <p class="muted">Achète des skins pour personnaliser tes unités, ou des couleurs d'équipe pour teinter tout ton camp.</p>
 
     <div id="msg"></div>
 
-    <div class="grid-cards" id="shopGrid"></div>
+    <div class="shop-tabs">
+      <div class="shop-tab active" data-tab="unit-skins">🤖 Skins d'unité</div>
+      <div class="shop-tab" data-tab="team-colors">🎨 Couleurs d'équipe</div>
+    </div>
+
+    <!-- ─── Onglet : Skins d'unité ─────────────────────────────────────── -->
+    <div class="shop-panel active" id="panel-unit-skins">
+      <div id="unitSkinsSections">
+        <div class="muted" style="padding: 20px; text-align: center;">Chargement…</div>
+      </div>
+
+      <h2 style="margin-top: 36px; font-size: 18px;">📦 Packs</h2>
+      <p class="muted" style="margin-top: 4px; font-size: 13px;">
+        Acheter en pack = remise. Les skins déjà possédés sont skippés (la currency n'est pas remboursée).
+      </p>
+      <div class="grid-cards" id="packsGrid" style="margin-top: 14px;"></div>
+    </div>
+
+    <!-- ─── Onglet : Couleurs d'équipe (legacy) ─────────────────────── -->
+    <div class="shop-panel" id="panel-team-colors">
+      <p class="muted" style="margin-bottom: 14px; font-size: 13px;">
+        Les couleurs d'équipe s'appliquent à <strong>toutes</strong> tes unités qui n'ont pas de skin individuel équipé.
+      </p>
+      <div class="grid-cards" id="teamColorsGrid"></div>
+    </div>
   </div>
 
   <script type="module">
-    import { supabase, getProfile, requireSession } from "/lib/supabase.js";
+    import { supabase, requireSession } from "/lib/supabase.js";
 
     await requireSession("/auth/login.html?next=" + encodeURIComponent(location.pathname));
-    const profile = await getProfile();
+
+    // ─── Chargement profil (avec equipped_skins) ───────────────────
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data: profile } = await supabase.from("re_profiles")
+      .select("id, username, is_admin, currency, current_skin_id, equipped_skins")
+      .eq("id", user.id)
+      .single();
+
     document.getElementById("currencyPill").textContent = `${profile.currency} 💰`;
     if (profile.is_admin) {
       document.getElementById("adminLink").innerHTML = `<a href="/admin/" style="padding:6px 12px; font-size:12px;">⚙️ Admin</a>`;
     }
-
     document.getElementById("signoutBtn").addEventListener("click", async () => {
       await supabase.auth.signOut();
       location.href = "/auth/login.html";
     });
 
+    // ─── Chargement données boutique + inventaire ───────────────────
     const { data: items } = await supabase
       .from("re_shop_items")
       .select("*")
@@ -56,12 +199,134 @@
       .eq("user_id", profile.id);
     const ownedIds = new Set((inventory || []).map(i => i.item_id));
 
-    const grid = document.getElementById("shopGrid");
-    const msg = document.getElementById("msg");
+    // Equipped skins par unité : mapping { unit_type: skin_id }
+    const equippedSkins = profile.equipped_skins || {};
 
-    function render() {
+    // Tri par catégorie (filtres défensifs : compatibles avec schéma pré-migration)
+    const unitSkins  = items.filter(i => i.type === "unit_skin" && !i.is_pack);
+    const packs      = items.filter(i => i.is_pack);
+    const teamColors = items.filter(i => i.type === "team_color" || (!i.unit_type && !i.is_pack));
+
+    const UNIT_META = {
+      light:   { label: "Light",   emoji: "🤖", description: "Soldat agile, faible HP, attaque rapide" },
+      heavy:   { label: "Heavy",   emoji: "🛡️", description: "Tank blindé, gros HP, dégâts lourds" },
+      swarmer: { label: "Swarmer", emoji: "🐛", description: "Insectoïde rapide, spam léger" },
+      sniper:  { label: "Sniper",  emoji: "🎯", description: "Longue portée, anti-air, dégâts lourds" },
+      air:     { label: "Air",     emoji: "✈️", description: "Drone aérien, survole les défenses" },
+    };
+    const UNIT_ORDER = ["light", "heavy", "swarmer", "sniper", "air"];
+
+    function spriteUrlFor(unit_type, tier) {
+      return `/08-art-direction/sprites/unit-${unit_type}-player-t${tier}.png`;
+    }
+
+    // ─── Rendu Skins d'unité ────────────────────────────────────────
+    function renderUnitSkins() {
+      const sectionsEl = document.getElementById("unitSkinsSections");
+      sectionsEl.innerHTML = "";
+
+      if (unitSkins.length === 0) {
+        sectionsEl.innerHTML = `<div class="muted" style="padding: 30px; text-align: center;">
+          Aucun skin d'unité disponible. La migration SQL a-t-elle été exécutée ?
+        </div>`;
+        return;
+      }
+
+      for (const unitType of UNIT_ORDER) {
+        const unitItems = unitSkins.filter(i => i.unit_type === unitType).sort((a, b) => a.tier - b.tier);
+        if (unitItems.length === 0) continue;
+        const meta = UNIT_META[unitType];
+        const equippedId = equippedSkins[unitType];
+
+        const section = document.createElement("div");
+        section.className = "unit-section";
+        section.innerHTML = `
+          <h2>
+            <img class="unit-icon" src="/08-art-direction/sprites/unit-${unitType}-player.png" alt="" />
+            ${meta.emoji} ${meta.label}
+            <span class="muted small" style="font-weight: 400; font-size: 12px;">— ${meta.description}</span>
+          </h2>
+          <div class="unit-grid" data-unit="${unitType}"></div>
+        `;
+
+        const grid = section.querySelector(".unit-grid");
+        for (const item of unitItems) {
+          const owned = ownedIds.has(item.id);
+          const equipped = equippedId === item.id;
+          const canAfford = profile.currency >= item.price;
+
+          const card = document.createElement("div");
+          card.className = `card unit-skin-card ${owned ? "owned" : ""} ${equipped ? "active" : ""} ${!owned && !canAfford ? "locked" : ""}`;
+          card.innerHTML = `
+            <div class="unit-skin-preview">
+              <img src="${spriteUrlFor(unitType, item.tier)}" alt="${item.name}" />
+              <span class="tier-badge badge-${item.rarity}">T${item.tier} · ${item.rarity}</span>
+            </div>
+            <div style="margin-bottom: 6px; font-weight: 700;">${item.name}</div>
+            <div class="muted small" style="margin-bottom: 10px;">
+              ${owned ? (equipped ? "✓ Équipé" : "Possédé") : `${item.price} 💰`}
+            </div>
+            ${owned
+              ? (equipped
+                  ? `<button class="btn-secondary btn-block" data-unequip="${unitType}">Déséquiper</button>`
+                  : `<button class="btn-success btn-block" data-equip="${item.id}" data-unit="${unitType}">Équiper</button>`)
+              : `<button class="btn-block" data-buy="${item.id}" ${canAfford ? "" : "disabled"}>${canAfford ? "Acheter" : "Pas assez 💰"}</button>`
+            }
+          `;
+          grid.appendChild(card);
+        }
+        sectionsEl.appendChild(section);
+      }
+    }
+
+    // ─── Rendu Packs ────────────────────────────────────────────────
+    function renderPacks() {
+      const grid = document.getElementById("packsGrid");
       grid.innerHTML = "";
-      for (const item of items) {
+      if (packs.length === 0) {
+        grid.innerHTML = `<div class="muted" style="padding: 20px;">Aucun pack disponible.</div>`;
+        return;
+      }
+      for (const pack of packs) {
+        const subIds = pack.pack_skin_ids || [];
+        const ownedSubs = subIds.filter(id => ownedIds.has(id));
+        const fullyOwned = ownedSubs.length === subIds.length;
+        const canAfford = profile.currency >= pack.price;
+        const subItems = subIds.map(id => items.find(i => i.id === id)).filter(Boolean);
+
+        const previewsHtml = subItems.map(s =>
+          `<img src="${spriteUrlFor(s.unit_type, s.tier)}" alt="${s.name}" title="${s.name}" />`
+        ).join("");
+
+        const card = document.createElement("div");
+        card.className = `card pack-card ${fullyOwned ? "owned" : ""} ${!fullyOwned && !canAfford ? "locked" : ""}`;
+        card.innerHTML = `
+          <div class="pack-preview">${previewsHtml}</div>
+          <div class="row-between" style="margin-bottom: 6px;">
+            <span style="font-weight: 700;">${pack.name}</span>
+            <span class="badge badge-${pack.rarity}">${pack.rarity}</span>
+          </div>
+          <div class="muted small" style="margin-bottom: 10px;">
+            ${fullyOwned ? "✓ Toutes les unités déjà possédées" : `${ownedSubs.length} / ${subIds.length} possédés · ${pack.price} 💰`}
+          </div>
+          ${fullyOwned
+            ? `<button class="btn-secondary btn-block" disabled>Complet</button>`
+            : `<button class="btn-block" data-buy="${pack.id}" ${canAfford ? "" : "disabled"}>${canAfford ? "Acheter le pack" : "Pas assez 💰"}</button>`
+          }
+        `;
+        grid.appendChild(card);
+      }
+    }
+
+    // ─── Rendu Couleurs d'équipe (legacy) ──────────────────────────
+    function renderTeamColors() {
+      const grid = document.getElementById("teamColorsGrid");
+      grid.innerHTML = "";
+      if (teamColors.length === 0) {
+        grid.innerHTML = `<div class="muted" style="padding: 20px;">Aucune couleur d'équipe disponible.</div>`;
+        return;
+      }
+      for (const item of teamColors) {
         const owned = ownedIds.has(item.id);
         const active = profile.current_skin_id === item.id;
         const canAfford = profile.currency >= item.price;
@@ -80,38 +345,116 @@
           ${owned
             ? (active
                 ? `<button class="btn-secondary btn-block" disabled>Équipée</button>`
-                : `<button class="btn-success btn-block" data-equip="${item.id}">Équiper</button>`)
+                : `<button class="btn-success btn-block" data-equip-team="${item.id}">Équiper</button>`)
             : `<button class="btn-block" data-buy="${item.id}" ${canAfford ? "" : "disabled"}>${canAfford ? "Acheter" : "Pas assez 💰"}</button>`
           }
         `;
         grid.appendChild(card);
       }
     }
-    render();
 
-    grid.addEventListener("click", async (e) => {
+    function renderAll() {
+      renderUnitSkins();
+      renderPacks();
+      renderTeamColors();
+    }
+    renderAll();
+
+    // ─── Onglets ────────────────────────────────────────────────────
+    document.querySelectorAll(".shop-tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".shop-tab").forEach(t => t.classList.remove("active"));
+        document.querySelectorAll(".shop-panel").forEach(p => p.classList.remove("active"));
+        tab.classList.add("active");
+        document.getElementById(`panel-${tab.dataset.tab}`).classList.add("active");
+      });
+    });
+
+    // ─── Achat / Équipement (event delegation globale) ─────────────
+    const msg = document.getElementById("msg");
+    function flash(html, type = "success") {
+      msg.innerHTML = `<div class="msg msg-${type}">${html}</div>`;
+      setTimeout(() => { msg.innerHTML = ""; }, 4000);
+    }
+
+    document.body.addEventListener("click", async (e) => {
       const buyId = e.target.dataset.buy;
       const equipId = e.target.dataset.equip;
+      const equipUnit = e.target.dataset.unit;
+      const equipTeam = e.target.dataset.equipTeam;
+      const unequipUnit = e.target.dataset.unequip;
+
+      // === Achat (item ou pack) ===
       if (buyId) {
-        e.target.disabled = true; e.target.textContent = "...";
+        e.target.disabled = true;
+        const originalText = e.target.textContent;
+        e.target.textContent = "...";
         const { data, error } = await supabase.rpc("re_buy_item", { p_item_id: buyId });
         if (error || !data?.ok) {
-          msg.innerHTML = `<div class="msg msg-error">${error?.message || data?.error || "Échec"}</div>`;
-          render();
+          flash(error?.message || data?.error || "Échec de l'achat", "error");
+          e.target.disabled = false;
+          e.target.textContent = originalText;
           return;
         }
         const item = items.find(i => i.id === buyId);
         profile.currency -= item.price;
-        ownedIds.add(buyId);
+        if (data.is_pack && data.sub_ids) {
+          data.sub_ids.forEach(id => ownedIds.add(id));
+          ownedIds.add(buyId);
+          flash(`✓ Pack "${item.name}" acheté ! ${data.sub_ids.length} skins ajoutés à ton inventaire.`);
+        } else {
+          ownedIds.add(buyId);
+          flash(`✓ "${item.name}" acheté !`);
+        }
         document.getElementById("currencyPill").textContent = `${profile.currency} 💰`;
-        msg.innerHTML = `<div class="msg msg-success">✓ "${item.name}" acheté !</div>`;
-        render();
-      } else if (equipId) {
-        await supabase.from("re_profiles").update({ current_skin_id: equipId, updated_at: new Date().toISOString() }).eq("id", profile.id);
-        profile.current_skin_id = equipId;
+        renderAll();
+        return;
+      }
+
+      // === Équipement skin d'unité ===
+      if (equipId && equipUnit) {
+        const { data, error } = await supabase.rpc("re_equip_unit_skin", {
+          p_unit_type: equipUnit,
+          p_skin_id: equipId,
+        });
+        if (error || !data?.ok) {
+          flash(error?.message || data?.error || "Échec", "error");
+          return;
+        }
+        equippedSkins[equipUnit] = equipId;
         const item = items.find(i => i.id === equipId);
-        msg.innerHTML = `<div class="msg msg-success">✓ "${item.name}" équipée. La couleur s'applique au prochain lancement de partie.</div>`;
-        render();
+        flash(`✓ "${item.name}" équipé. Apparence active au prochain lancement de partie.`);
+        renderAll();
+        return;
+      }
+
+      // === Déséquipement skin d'unité ===
+      if (unequipUnit) {
+        const { data, error } = await supabase.rpc("re_equip_unit_skin", {
+          p_unit_type: unequipUnit,
+          p_skin_id: null,
+        });
+        if (error || !data?.ok) {
+          flash(error?.message || data?.error || "Échec", "error");
+          return;
+        }
+        delete equippedSkins[unequipUnit];
+        flash(`✓ Skin déséquipé. Retour au sprite par défaut.`);
+        renderAll();
+        return;
+      }
+
+      // === Équipement couleur d'équipe (legacy) ===
+      if (equipTeam) {
+        await supabase.from("re_profiles").update({
+          current_skin_id: equipTeam,
+          updated_at: new Date().toISOString(),
+        }).eq("id", profile.id);
+        profile.current_skin_id = equipTeam;
+        const item = items.find(i => i.id === equipTeam);
+        flash(`✓ "${item.name}" équipée. S'applique au prochain lancement de partie.`);
+        renderAll();
+        return;
       }
     });
   </script>

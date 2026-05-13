@@ -2937,10 +2937,24 @@ function drawHoverRange(ctx) {
   ctx.restore();
 }
 
+// Renvoie le nom du sprite à utiliser pour une unité, en tenant compte du skin
+// équipé par le joueur (T1/T2 — sprite avec ajouts physiques baked-in).
+// Tomb sur unit-{type}-{side}.png par défaut si pas de skin ou sprite manquant.
+function unitSpriteNameFor(u) {
+  const baseName = `unit-${u.typeId}-${u.side}`;
+  // Skins par unité : appliqués uniquement côté player (le user achète pour lui)
+  if (u.side !== "player") return baseName;
+  const tier = window.RE_AUTH?.equippedSkins?.[u.typeId];
+  if (!tier) return baseName;
+  const tieredName = `${baseName}-t${tier}`;
+  // Fallback si le sprite tieré n'est pas chargé
+  return sprites[tieredName] ? tieredName : baseName;
+}
+
 function drawUnits(ctx) {
   for (const u of game.units) {
     const radius = u.stats.radius;
-    const spriteName = `unit-${u.typeId}-${u.side}`;
+    const spriteName = unitSpriteNameFor(u);
     if (sprites[spriteName]) {
       const size = radius * 4;
       // Les sprites enemy ont leur canon/œil orienté vers +X (comme les player).

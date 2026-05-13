@@ -1,12 +1,13 @@
 // Pont entre Supabase et game.js (qui est en script classique non-module)
 // Expose window.RE_AUTH avec session, profile, skin, methods de save game results, etc.
-import { supabase, getProfile, getCurrentSkin } from "/lib/supabase.js";
+import { supabase, getProfile, getCurrentSkin, getEquippedSkinTiers } from "/lib/supabase.js";
 
 const RE_AUTH = {
   ready: false,
   session: null,
   profile: null,
-  skin: null,        // { hex_color, hex_color_dark } ou null
+  skin: null,           // { hex_color, hex_color_dark } ou null (couleur d'équipe legacy — tint UI)
+  equippedSkins: {},    // { light: 1, heavy: 2, ... } — tier équipé par unité (override sprite)
 
   async refresh() {
     const { data: { session } } = await supabase.auth.getSession();
@@ -14,9 +15,11 @@ const RE_AUTH = {
     if (session) {
       this.profile = await getProfile();
       this.skin = await getCurrentSkin();
+      this.equippedSkins = await getEquippedSkinTiers();
     } else {
       this.profile = null;
       this.skin = null;
+      this.equippedSkins = {};
     }
     this.ready = true;
     // Notifie game.js que les données auth sont prêtes / changées
