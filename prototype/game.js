@@ -670,21 +670,21 @@ function buildSlots() {
   game.player.slots = buildSide("player");
   game.enemy.slots = buildSide("enemy");
 
-  // Wall slots : 1 par rangée non-path (8 slots par camp) — placement de turrets
+  // Wall slots : 1 par rangée non-path (8 slots par camp) — placement de turrets.
+  // Hitbox large (36px de large) qui déborde de chaque côté du rempart pour faciliter le clic.
   for (const side of ["player", "enemy"]) {
     const state = game[side];
     state.wallSlots = [];
     for (let row = 0; row < CONFIG.GRID_ROWS; row++) {
-      if (CONFIG.PATH_ROWS.includes(row)) continue; // les gates ne reçoivent pas de turret
-      // Y du slot = Y d'un slot de cette row dans la grille (alignement)
+      if (CONFIG.PATH_ROWS.includes(row)) continue;
       const gridSlot = state.slots.find((s) => s.row === row && s.col === 0);
       if (!gridSlot) continue;
-      const wallX = side === "player" ? CONFIG.BASE_W - 22 : CONFIG.W - CONFIG.BASE_W - 2;
+      const wallX = side === "player" ? CONFIG.BASE_W - 28 : CONFIG.W - CONFIG.BASE_W - 8;
       state.wallSlots.push({
         row,
         x: wallX,
         y: gridSlot.y,
-        w: 24,
+        w: 36,
         h: gridSlot.size,
         turret: null,
       });
@@ -2266,27 +2266,36 @@ function drawWallSlots(ctx, side) {
   for (let i = 0; i < state.wallSlots.length; i++) {
     const slot = state.wallSlots[i];
     if (slot.turret) {
-      // Le turret est rendu via drawUnits, ici juste un socle visuel sur le rempart
-      ctx.fillStyle = "rgba(15, 23, 42, 0.8)";
-      ctx.fillRect(slot.x, slot.y + slot.h * 0.25, slot.w, slot.h * 0.5);
-      ctx.strokeStyle = "rgba(255,255,255,0.25)";
+      // Socle visuel sur le rempart (le turret lui-même est rendu via drawUnits)
+      ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.fillRect(slot.x, slot.y + slot.h * 0.2, slot.w, slot.h * 0.6);
+      ctx.strokeStyle = "rgba(255,255,255,0.3)";
       ctx.lineWidth = 1;
-      ctx.strokeRect(slot.x + 0.5, slot.y + 0.5 + slot.h * 0.25, slot.w - 1, slot.h * 0.5 - 1);
+      ctx.strokeRect(slot.x + 0.5, slot.y + slot.h * 0.2 + 0.5, slot.w - 1, slot.h * 0.6 - 1);
       continue;
     }
     if (buildMode) {
       const hover = game.ui.hoverWallSlot;
       const isHover = hover && hover.side === "player" && hover.idx === i;
       const canAfford = game.player.money >= TURRET_TYPE.cost;
+      // Pulse subtil sur les slots non-survolés (rend l'emplacement évident)
+      const pulse = 0.5 + 0.3 * Math.sin(game.time * 4 + i);
+      const baseAlpha = canAfford ? (0.25 + 0.15 * pulse) : 0.18;
       ctx.fillStyle = isHover
-        ? (canAfford ? "rgba(34, 211, 238, 0.45)" : "rgba(239, 68, 68, 0.40)")
-        : "rgba(34, 211, 238, 0.18)";
-      ctx.fillRect(slot.x, slot.y + slot.h * 0.2, slot.w, slot.h * 0.6);
-      ctx.strokeStyle = "rgba(34, 211, 238, 0.85)";
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([3, 3]);
-      ctx.strokeRect(slot.x + 0.5, slot.y + slot.h * 0.2 + 0.5, slot.w - 1, slot.h * 0.6 - 1);
+        ? (canAfford ? "rgba(34, 211, 238, 0.70)" : "rgba(239, 68, 68, 0.55)")
+        : (canAfford ? `rgba(34, 211, 238, ${baseAlpha})` : "rgba(239, 68, 68, 0.15)");
+      ctx.fillRect(slot.x, slot.y, slot.w, slot.h);
+      ctx.strokeStyle = isHover ? "#fff" : (canAfford ? "rgba(34, 211, 238, 0.95)" : "rgba(239, 68, 68, 0.65)");
+      ctx.lineWidth = isHover ? 2 : 1.5;
+      ctx.setLineDash(isHover ? [] : [4, 3]);
+      ctx.strokeRect(slot.x + 0.5, slot.y + 0.5, slot.w - 1, slot.h - 1);
       ctx.setLineDash([]);
+      // Petite icône turret au centre du slot
+      ctx.fillStyle = canAfford ? "#fff" : "rgba(255,255,255,0.5)";
+      ctx.font = "bold 16px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("🗼", slot.x + slot.w / 2, slot.y + slot.h / 2);
     }
   }
 }
