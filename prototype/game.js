@@ -3097,6 +3097,8 @@ function makeLightningSegments(x, y1, y2) {
 }
 
 function updateCamera(dt) {
+  // Sur device tactile : pas d'edge-scroll (le pan se fait via swipe).
+  if (IS_TOUCH) return;
   const margin = CONFIG.CAMERA_SCROLL_MARGIN;
   const speed = CONFIG.CAMERA_SCROLL_SPEED;
   const sx = game.ui.mouseScreen.x;
@@ -7163,6 +7165,12 @@ function findSlotAt(side, x, y) {
   return -1;
 }
 
+// Détection device tactile : utilisé pour adapter les comportements
+// (pas d'auto-scroll par bord d'écran, pan caméra par swipe à la place,
+// pas de hover-only features). Évalué une fois au boot.
+const IS_TOUCH = (typeof window !== "undefined")
+  && ("ontouchstart" in window || navigator.maxTouchPoints > 0);
+
 function setupInput(canvas) {
   canvas.addEventListener("mouseenter", () => { game.ui.mouseInside = true; });
   canvas.addEventListener("mouseleave", () => {
@@ -7997,6 +8005,91 @@ function setupInput(canvas) {
       game.camera.x = maxScroll;
     }
   });
+
+  // ── Touch handlers (mobile / tablette) ─────────────────────────────────
+  // Mappe touch → pipeline existant : tap court = click ; swipe long sur la
+  // zone monde = pan caméra. On ne tente pas de hover-only feature.
+  let touchStart = null;
+  let touchPanned = false;
+  const TOUCH_PAN_THRESHOLD = 12; // pixels avant de basculer en mode pan
+
+  function canPanFrom(sx, sy) {
+    // On ne pan pas si on touch le HUD, un panel, un overlay actif.
+    if (sy < CONFIG.HUD_H) return false;
+    if (game.ui.upgradePanel) return false;
+    if (game.ui.settingsOpen) return false;
+    if (game.ui.emoteMenuOpen) return false;
+    if (game.gameOver) return false;
+    if (game.tutorial?.active) return false;
+    if (game.screen !== "playing") return false;
+    return true;
+  }
+
+  canvas.addEventListener("touchstart", (evt) => {
+    if (evt.touches.length !== 1) return;
+    evt.preventDefault();
+    const t = evt.touches[0];
+    const pos = canvasCoordsFromEvent(canvas, t);
+    touchStart = {
+      x: pos.x, y: pos.y,
+      camX: game.camera.x,
+      time: performance.now(),
+      panAllowed: canPanFrom(pos.x, pos.y),
+    };
+    touchPanned = false;
+    game.ui.mouseScreen.x = pos.x;
+    game.ui.mouseScreen.y = pos.y;
+    game.ui.mouseInside = true;
+  }, { passive: false });
+
+  canvas.addEventListener("touchmove", (evt) => {
+    if (!touchStart || evt.touches.length !== 1) return;
+    evt.preventDefault();
+    const t = evt.touches[0];
+    const pos = canvasCoordsFromEvent(canvas, t);
+    const dx = pos.x - touchStart.x;
+    const dy = pos.y - touchStart.y;
+    if (Math.hypot(dx, dy) > TOUCH_PAN_THRESHOLD && touchStart.panAllowed) {
+      touchPanned = true;
+    }
+    if (touchPanned) {
+      // Doigt vers la gauche → caméra avance vers la droite
+      const maxScroll = Math.max(0, CONFIG.W - CONFIG.CANVAS_W);
+      let nx = touchStart.camX - dx;
+      if (nx < 0) nx = 0;
+      if (nx > maxScroll) nx = maxScroll;
+      game.camera.x = nx;
+      game.ui.hoverSlot = null;
+      game.ui.hoverUnit = null;
+    } else {
+      // Pas (encore) en pan : on suit le doigt comme un curseur
+      game.ui.mouseScreen.x = pos.x;
+      game.ui.mouseScreen.y = pos.y;
+    }
+  }, { passive: false });
+
+  canvas.addEventListener("touchend", (evt) => {
+    if (!touchStart) return;
+    evt.preventDefault();
+    if (!touchPanned) {
+      // Tap court : on dispatche un click synthétique au point d'origine,
+      // ce qui déclenche tous les handlers click déjà branchés (boutons,
+      // build, lightning aim, etc.). On utilise les coords écran initiales.
+      const rect = canvas.getBoundingClientRect();
+      const clientX = touchStart.x * (rect.width / canvas.width) + rect.left;
+      const clientY = touchStart.y * (rect.height / canvas.height) + rect.top;
+      canvas.dispatchEvent(new MouseEvent("click", { clientX, clientY, bubbles: false }));
+    }
+    touchStart = null;
+    touchPanned = false;
+    // Sur touch on n'a pas de "leave" naturel — on garde mouseInside true
+    // pour que les handlers continuent à recevoir les positions de tap.
+  }, { passive: false });
+
+  canvas.addEventListener("touchcancel", () => {
+    touchStart = null;
+    touchPanned = false;
+  }, { passive: false });
 }
 
 function resetGame() {
