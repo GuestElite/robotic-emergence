@@ -643,11 +643,28 @@ const SPRITE_FILES = [
   "unit-sniper-player",
   "unit-sniper-enemy",
   "effect-explosion",
+  // Props désert
   "prop-rock-big",
   "prop-rock-small",
   "prop-cactus",
   "prop-dry-brush",
   "prop-grass-tuft",
+  // Props jungle
+  "prop-rock-jungle-big",
+  "prop-rock-jungle-small",
+  "prop-jungle-tree",
+  "prop-jungle-vines",
+  "prop-fern-tuft",
+  "prop-mushroom",
+  "prop-moss-patch",
+  // Props snow
+  "prop-rock-snow-big",
+  "prop-rock-snow-small",
+  "prop-pine-tree",
+  "prop-frozen-bush",
+  "prop-ice-shard",
+  "prop-snow-pile",
+  "prop-dead-branch",
 ];
 
 // -------------------------------------------------------------
@@ -660,54 +677,144 @@ const SPRITE_FILES = [
 // Le sprite est dessiné avec sa BASE alignée sur (x, y) — autrement dit l'ancre
 // est en bas-centre du sprite (comme une plante posée sur le sol).
 const PROP_TYPES = {
-  "rock-big":   { sprite: "prop-rock-big",   w: 36, h: 36, blocking: true,
-                  // bbox = empreinte au sol, centrée sur (x, y), un peu plus
-                  // étroit que la silhouette pour éviter le wall-stick
-                  bbox: { dx: -11, dy: -7, w: 22, h: 9 } },
-  "rock-small": { sprite: "prop-rock-small", w: 24, h: 24, blocking: true,
-                  bbox: { dx: -7, dy: -5, w: 14, h: 6 } },
-  "cactus":     { sprite: "prop-cactus",     w: 30, h: 50, blocking: true,
-                  // bbox au pied du cactus, ne bloque pas les bras qui dépassent
-                  bbox: { dx: -6, dy: -6, w: 12, h: 6 } },
-  "dry-brush":  { sprite: "prop-dry-brush",  w: 34, h: 28, blocking: false,
-                  bbox: null },
-  "grass-tuft": { sprite: "prop-grass-tuft", w: 20, h: 16, blocking: false,
-                  bbox: null },
+  // === DESERT ===
+  "rock-big":          { sprite: "prop-rock-big",   w: 36, h: 36, blocking: true,
+                         // bbox = empreinte au sol, centrée sur (x, y), un peu plus
+                         // étroit que la silhouette pour éviter le wall-stick
+                         bbox: { dx: -11, dy: -7, w: 22, h: 9 } },
+  "rock-small":        { sprite: "prop-rock-small", w: 24, h: 24, blocking: true,
+                         bbox: { dx: -7, dy: -5, w: 14, h: 6 } },
+  "cactus":            { sprite: "prop-cactus",     w: 30, h: 50, blocking: true,
+                         bbox: { dx: -6, dy: -6, w: 12, h: 6 } },
+  "dry-brush":         { sprite: "prop-dry-brush",  w: 34, h: 28, blocking: false, bbox: null },
+  "grass-tuft":        { sprite: "prop-grass-tuft", w: 20, h: 16, blocking: false, bbox: null },
+  // === JUNGLE ===
+  "rock-jungle-big":   { sprite: "prop-rock-jungle-big",   w: 36, h: 36, blocking: true,
+                         bbox: { dx: -11, dy: -7, w: 22, h: 9 } },
+  "rock-jungle-small": { sprite: "prop-rock-jungle-small", w: 24, h: 24, blocking: true,
+                         bbox: { dx: -7, dy: -5, w: 14, h: 6 } },
+  "jungle-tree":       { sprite: "prop-jungle-tree",       w: 30, h: 50, blocking: true,
+                         bbox: { dx: -5, dy: -6, w: 10, h: 6 } },
+  "jungle-vines":      { sprite: "prop-jungle-vines",      w: 34, h: 28, blocking: false, bbox: null },
+  "fern-tuft":         { sprite: "prop-fern-tuft",         w: 20, h: 16, blocking: false, bbox: null },
+  "mushroom":          { sprite: "prop-mushroom",          w: 20, h: 16, blocking: false, bbox: null },
+  "moss-patch":        { sprite: "prop-moss-patch",        w: 28, h: 16, blocking: false, bbox: null },
+  // === SNOW ===
+  "rock-snow-big":     { sprite: "prop-rock-snow-big",     w: 36, h: 36, blocking: true,
+                         bbox: { dx: -11, dy: -7, w: 22, h: 9 } },
+  "rock-snow-small":   { sprite: "prop-rock-snow-small",   w: 24, h: 24, blocking: true,
+                         bbox: { dx: -7, dy: -5, w: 14, h: 6 } },
+  "pine-tree":         { sprite: "prop-pine-tree",         w: 30, h: 50, blocking: true,
+                         bbox: { dx: -4, dy: -5, w: 8, h: 5 } },
+  "frozen-bush":       { sprite: "prop-frozen-bush",       w: 28, h: 24, blocking: false, bbox: null },
+  "ice-shard":         { sprite: "prop-ice-shard",         w: 20, h: 16, blocking: true,
+                         bbox: { dx: -5, dy: -4, w: 10, h: 5 } },
+  "snow-pile":         { sprite: "prop-snow-pile",         w: 28, h: 16, blocking: false, bbox: null },
+  "dead-branch":       { sprite: "prop-dead-branch",       w: 34, h: 28, blocking: false, bbox: null },
+};
+
+// Mapping nom de sprite → biome (utilisé par spritePathFor pour résoudre
+// le bon dossier de chargement)
+const PROP_BIOME = {
+  // desert
+  "prop-rock-big": "desert", "prop-rock-small": "desert", "prop-cactus": "desert",
+  "prop-dry-brush": "desert", "prop-grass-tuft": "desert",
+  // jungle
+  "prop-rock-jungle-big": "jungle", "prop-rock-jungle-small": "jungle",
+  "prop-jungle-tree": "jungle", "prop-jungle-vines": "jungle",
+  "prop-fern-tuft": "jungle", "prop-mushroom": "jungle", "prop-moss-patch": "jungle",
+  // snow
+  "prop-rock-snow-big": "snow", "prop-rock-snow-small": "snow",
+  "prop-pine-tree": "snow", "prop-frozen-bush": "snow",
+  "prop-ice-shard": "snow", "prop-snow-pile": "snow", "prop-dead-branch": "snow",
 };
 
 // Positions fixes (déterministes pour V1). x/y = pied du prop dans le monde.
 // Le monde fait 2000 × 720, bases ~280 px à gauche/droite, battlefield ~320..1720.
-// Disposition : 22 props éparpillés, variation haut/milieu-extérieur/bas,
-// jamais sur les voies du milieu (Y ≈ 156/300/444 pour PATH_ROWS [2,5,8]).
-const PROP_POSITIONS = [
-  // === Bande supérieure (Y 100-150) — au-dessus du gate du haut ===
-  { type: "rock-big",   x: 380,  y: 115 },
-  { type: "grass-tuft", x: 510,  y: 105 },
-  { type: "cactus",     x: 640,  y: 130 },
-  { type: "rock-small", x: 770,  y: 110 },
-  { type: "dry-brush",  x: 910,  y: 125 },
-  { type: "rock-big",   x: 1090, y: 138 },
-  { type: "grass-tuft", x: 1230, y: 108 },
-  { type: "cactus",     x: 1380, y: 145 },
-  { type: "rock-small", x: 1530, y: 118 },
-  { type: "dry-brush",  x: 1660, y: 132 },
-
-  // === Bandes intermédiaires entre les voies (Y 220-280 et Y 360-410) ===
-  { type: "rock-small", x: 420,  y: 250 },
-  { type: "grass-tuft", x: 1180, y: 235 },
-  { type: "rock-big",   x: 1480, y: 385 },
-  { type: "dry-brush",  x: 600,  y: 395 },
-  { type: "cactus",     x: 880,  y: 405 },
-
-  // === Bande inférieure (Y 500-690) — sous le gate du bas ===
-  { type: "rock-big",   x: 420,  y: 535 },
-  { type: "cactus",     x: 590,  y: 600 },
-  { type: "dry-brush",  x: 760,  y: 560 },
-  { type: "rock-small", x: 920,  y: 640 },
-  { type: "grass-tuft", x: 1080, y: 595 },
-  { type: "rock-big",   x: 1300, y: 555 },
-  { type: "rock-small", x: 1620, y: 650 },
-];
+// 22 props par biome, jamais sur les voies du milieu (Y ≈ 156/300/444).
+const PROP_POSITIONS_BY_BIOME = {
+  desert: [
+    // Bande haute
+    { type: "rock-big",   x: 380,  y: 115 },
+    { type: "grass-tuft", x: 510,  y: 105 },
+    { type: "cactus",     x: 640,  y: 130 },
+    { type: "rock-small", x: 770,  y: 110 },
+    { type: "dry-brush",  x: 910,  y: 125 },
+    { type: "rock-big",   x: 1090, y: 138 },
+    { type: "grass-tuft", x: 1230, y: 108 },
+    { type: "cactus",     x: 1380, y: 145 },
+    { type: "rock-small", x: 1530, y: 118 },
+    { type: "dry-brush",  x: 1660, y: 132 },
+    // Bandes intermédiaires
+    { type: "rock-small", x: 420,  y: 250 },
+    { type: "grass-tuft", x: 1180, y: 235 },
+    { type: "rock-big",   x: 1480, y: 385 },
+    { type: "dry-brush",  x: 600,  y: 395 },
+    { type: "cactus",     x: 880,  y: 405 },
+    // Bande basse
+    { type: "rock-big",   x: 420,  y: 535 },
+    { type: "cactus",     x: 590,  y: 600 },
+    { type: "dry-brush",  x: 760,  y: 560 },
+    { type: "rock-small", x: 920,  y: 640 },
+    { type: "grass-tuft", x: 1080, y: 595 },
+    { type: "rock-big",   x: 1300, y: 555 },
+    { type: "rock-small", x: 1620, y: 650 },
+  ],
+  jungle: [
+    // Bande haute — arbres + mousse + champignons
+    { type: "jungle-tree",       x: 380,  y: 130 },
+    { type: "fern-tuft",         x: 490,  y: 115 },
+    { type: "rock-jungle-big",   x: 600,  y: 140 },
+    { type: "mushroom",          x: 720,  y: 105 },
+    { type: "jungle-vines",      x: 820,  y: 130 },
+    { type: "moss-patch",        x: 950,  y: 120 },
+    { type: "rock-jungle-small", x: 1080, y: 145 },
+    { type: "jungle-tree",       x: 1220, y: 135 },
+    { type: "fern-tuft",         x: 1380, y: 110 },
+    { type: "jungle-vines",      x: 1530, y: 130 },
+    // Intermédiaires
+    { type: "rock-jungle-small", x: 430,  y: 250 },
+    { type: "mushroom",          x: 720,  y: 235 },
+    { type: "moss-patch",        x: 1180, y: 245 },
+    { type: "fern-tuft",         x: 600,  y: 395 },
+    { type: "rock-jungle-big",   x: 1480, y: 385 },
+    // Bande basse
+    { type: "jungle-tree",       x: 420,  y: 545 },
+    { type: "rock-jungle-big",   x: 580,  y: 610 },
+    { type: "mushroom",          x: 760,  y: 575 },
+    { type: "rock-jungle-small", x: 920,  y: 645 },
+    { type: "fern-tuft",         x: 1080, y: 600 },
+    { type: "jungle-tree",       x: 1300, y: 555 },
+    { type: "rock-jungle-small", x: 1620, y: 650 },
+  ],
+  snow: [
+    // Bande haute — sapins + glaçons + congères
+    { type: "pine-tree",       x: 380,  y: 130 },
+    { type: "ice-shard",       x: 490,  y: 115 },
+    { type: "rock-snow-big",   x: 600,  y: 145 },
+    { type: "snow-pile",       x: 720,  y: 110 },
+    { type: "frozen-bush",     x: 830,  y: 135 },
+    { type: "ice-shard",       x: 960,  y: 115 },
+    { type: "rock-snow-small", x: 1080, y: 145 },
+    { type: "pine-tree",       x: 1220, y: 135 },
+    { type: "dead-branch",     x: 1380, y: 125 },
+    { type: "snow-pile",       x: 1530, y: 110 },
+    // Intermédiaires
+    { type: "rock-snow-small", x: 430,  y: 250 },
+    { type: "ice-shard",       x: 720,  y: 235 },
+    { type: "snow-pile",       x: 1180, y: 245 },
+    { type: "frozen-bush",     x: 600,  y: 395 },
+    { type: "rock-snow-big",   x: 1480, y: 385 },
+    // Bande basse
+    { type: "pine-tree",       x: 420,  y: 545 },
+    { type: "rock-snow-big",   x: 580,  y: 610 },
+    { type: "ice-shard",       x: 760,  y: 570 },
+    { type: "rock-snow-small", x: 920,  y: 645 },
+    { type: "dead-branch",     x: 1080, y: 600 },
+    { type: "pine-tree",       x: 1300, y: 555 },
+    { type: "rock-snow-small", x: 1620, y: 650 },
+  ],
+};
 
 const sprites = {};
 
@@ -737,8 +844,14 @@ const BIOME_LABELS = {
 };
 
 function spritePathFor(name, biome) {
+  // Sprites biome-specific (tile-ground + enemy units + enemy factories)
   if (BIOME_SPECIFIC_SPRITES.has(name) && biome && biome !== "desert") {
     return `../12-biomes/${biome}/sprites/${name}.png`;
+  }
+  // Props biome-specific : chacun est mappé à son biome propre via PROP_BIOME
+  const propBiome = PROP_BIOME[name];
+  if (propBiome && propBiome !== "desert") {
+    return `../12-biomes/${propBiome}/sprites/${name}.png`;
   }
   return `../08-art-direction/sprites/${name}.png`;
 }
@@ -2276,7 +2389,18 @@ function drawUnits(ctx) {
     const spriteName = `unit-${u.typeId}-${u.side}`;
     if (sprites[spriteName]) {
       const size = radius * 4;
-      ctx.drawImage(sprites[spriteName], u.x - size / 2, u.y - size / 2, size, size);
+      // Les sprites enemy ont leur canon/œil orienté vers +X (comme les player).
+      // Or les unités enemy avancent vers -X (la base joueur). Donc on flippe
+      // horizontalement le sprite pour que les ennemis "regardent" leur cible.
+      if (u.side === "enemy") {
+        ctx.save();
+        ctx.translate(u.x, u.y);
+        ctx.scale(-1, 1);
+        ctx.drawImage(sprites[spriteName], -size / 2, -size / 2, size, size);
+        ctx.restore();
+      } else {
+        ctx.drawImage(sprites[spriteName], u.x - size / 2, u.y - size / 2, size, size);
+      }
     } else {
       drawUnitPlaceholder(ctx, u, radius);
     }
@@ -4393,11 +4517,11 @@ function resetGame() {
   game.player = makeSideState("player");
   game.enemy = makeSideState("enemy");
   game.units = [];
-  // Props : pour V1, uniquement en biome désert (jungle/snow auront leurs
-  // propres props plus tard, les cactus/rochers désert ne collent pas).
-  game.props = game.biome === "desert"
-    ? PROP_POSITIONS.map((p) => ({ type: p.type, x: p.x, y: p.y, def: PROP_TYPES[p.type] }))
-    : [];
+  // Props biome-specific : chaque biome a sa liste de props (22 environ).
+  const biomeProps = PROP_POSITIONS_BY_BIOME[game.biome] || [];
+  game.props = biomeProps.map((p) => ({
+    type: p.type, x: p.x, y: p.y, def: PROP_TYPES[p.type],
+  }));
   game.attackFx = [];
   game.explosions = [];
   game.lightning = null;
