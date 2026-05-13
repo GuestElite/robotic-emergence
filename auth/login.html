@@ -8,27 +8,43 @@
 </head>
 <body>
   <div class="center-page">
-    <form class="card" id="loginForm">
+    <div class="card">
       <p class="brand">🤖 ÉMERGENCE</p>
       <p class="brand-sub">Connexion</p>
 
       <div id="msg"></div>
 
-      <label for="email">Email</label>
-      <input type="email" id="email" required autocomplete="email" />
+      <form id="loginForm">
+        <label for="email">Email</label>
+        <input type="email" id="email" required autocomplete="email" />
 
-      <label for="password">Mot de passe</label>
-      <input type="password" id="password" required autocomplete="current-password" />
+        <label for="password">Mot de passe</label>
+        <input type="password" id="password" required autocomplete="current-password" />
 
-      <div style="height: 18px"></div>
+        <div style="height: 14px"></div>
 
-      <button class="btn-block" id="submitBtn" type="submit">Se connecter</button>
+        <button class="btn-block" id="submitBtn" type="submit">Se connecter</button>
+      </form>
 
-      <p class="small muted" style="text-align:center; margin-top: 16px">
+      <div style="display:flex; align-items:center; gap:10px; margin: 20px 0; color: var(--text-muted); font-size: 12px;">
+        <div style="flex:1; height:1px; background: var(--border);"></div>
+        OU
+        <div style="flex:1; height:1px; background: var(--border);"></div>
+      </div>
+
+      <button type="button" class="btn-secondary btn-block" id="magicBtn">
+        ✉️ Recevoir un lien magique par email
+      </button>
+
+      <p class="small muted" style="text-align:center; margin-top: 18px">
+        <a href="#" id="forgotLink">Mot de passe oublié ?</a>
+      </p>
+
+      <p class="small muted" style="text-align:center; margin-top: 8px">
         Pas encore de compte ? <a href="/auth/signup.html">Créer un compte</a><br>
         <a href="/prototype/">← Retour au jeu (mode invité)</a>
       </p>
-    </form>
+    </div>
   </div>
 
   <script type="module">
@@ -37,29 +53,94 @@
     const form = document.getElementById("loginForm");
     const msg = document.getElementById("msg");
     const btn = document.getElementById("submitBtn");
+    const magicBtn = document.getElementById("magicBtn");
+    const forgotLink = document.getElementById("forgotLink");
+    const emailInput = document.getElementById("email");
+
+    function flash(html, cls = "msg-error") {
+      msg.innerHTML = `<div class="msg ${cls}">${html}</div>`;
+    }
+    function clearFlash() { msg.innerHTML = ""; }
+
+    function redirectAfterLogin() {
+      const next = new URLSearchParams(location.search).get("next") || "/prototype/";
+      // Petit délai pour laisser la session se persister en localStorage
+      setTimeout(() => { location.assign(next); }, 50);
+    }
 
     // Redirect si déjà connecté
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session) {
-      const redirect = new URLSearchParams(location.search).get("next") || "/prototype/";
-      location.href = redirect;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) redirectAfterLogin();
+    } catch (e) {
+      console.error("[login] getSession error", e);
     }
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      msg.innerHTML = "";
+      clearFlash();
       btn.disabled = true; btn.textContent = "Connexion…";
-      const email = document.getElementById("email").value.trim();
+      const email = emailInput.value.trim();
       const password = document.getElementById("password").value;
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) {
-        msg.innerHTML = `<div class="msg msg-error">${error.message}</div>`;
+
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) {
+          console.warn("[login] signIn error:", error);
+          flash(translateError(error.message));
+          btn.disabled = false; btn.textContent = "Se connecter";
+          return;
+        }
+        if (!data?.session) {
+          flash("Connexion : pas de session reçue. Réessaie ou utilise le lien magique.");
+          btn.disabled = false; btn.textContent = "Se connecter";
+          return;
+        }
+        flash("✓ Connecté ! Redirection…", "msg-success");
+        redirectAfterLogin();
+      } catch (e) {
+        console.error("[login] unexpected", e);
+        flash("Erreur inattendue : " + (e.message || e));
         btn.disabled = false; btn.textContent = "Se connecter";
+      }
+    });
+
+    magicBtn.addEventListener("click", async () => {
+      const email = emailInput.value.trim();
+      if (!email) { flash("Saisis ton email puis clique sur le lien magique."); emailInput.focus(); return; }
+      magicBtn.disabled = true; magicBtn.textContent = "Envoi…";
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: location.origin + "/prototype/" },
+      });
+      if (error) {
+        flash(translateError(error.message));
+        magicBtn.disabled = false; magicBtn.textContent = "✉️ Recevoir un lien magique par email";
         return;
       }
-      const redirect = new URLSearchParams(location.search).get("next") || "/prototype/";
-      location.href = redirect;
+      flash(`✓ Lien envoyé à <strong>${email}</strong>. Ouvre l'email et clique sur le lien pour te connecter.`, "msg-success");
+      magicBtn.textContent = "Email envoyé ✓";
     });
+
+    forgotLink.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const email = emailInput.value.trim();
+      if (!email) { flash("Saisis d'abord ton email."); emailInput.focus(); return; }
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: location.origin + "/auth/reset.html",
+      });
+      if (error) { flash(translateError(error.message)); return; }
+      flash(`✓ Email de réinitialisation envoyé à <strong>${email}</strong>.`, "msg-success");
+    });
+
+    function translateError(m) {
+      if (!m) return "Erreur inconnue.";
+      if (/Invalid login credentials/i.test(m)) return "Email ou mot de passe incorrect.";
+      if (/Email not confirmed/i.test(m)) return "Email pas encore confirmé. Vérifie ta boîte mail.";
+      if (/over.+limit|too many/i.test(m)) return "Trop de tentatives — réessaie dans 1 minute.";
+      if (/network/i.test(m)) return "Problème réseau, réessaie.";
+      return m;
+    }
   </script>
 </body>
 </html>

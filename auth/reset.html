@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Réinitialiser le mot de passe — Robotic Emergence</title>
+  <link rel="stylesheet" href="/lib/theme.css" />
+</head>
+<body>
+  <div class="center-page">
+    <form class="card" id="resetForm">
+      <p class="brand">🤖 ÉMERGENCE</p>
+      <p class="brand-sub">Nouveau mot de passe</p>
+
+      <div id="msg"></div>
+
+      <label for="password">Nouveau mot de passe (≥ 6 caractères)</label>
+      <input type="password" id="password" required minlength="6" autocomplete="new-password" />
+
+      <div style="height: 14px"></div>
+
+      <button class="btn-block" id="submitBtn" type="submit">Mettre à jour</button>
+
+      <p class="small muted" style="text-align:center; margin-top: 16px">
+        <a href="/auth/login.html">← Retour à la connexion</a>
+      </p>
+    </form>
+  </div>
+
+  <script type="module">
+    import { supabase } from "/lib/supabase.js";
+    const form = document.getElementById("resetForm");
+    const msg = document.getElementById("msg");
+    const btn = document.getElementById("submitBtn");
+
+    // Au chargement : Supabase parse le hash et établit une session temporaire
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      msg.innerHTML = `<div class="msg msg-error">Lien expiré ou invalide. Refais une demande depuis la page de connexion.</div>`;
+      btn.disabled = true;
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      btn.disabled = true; btn.textContent = "Mise à jour…";
+      const password = document.getElementById("password").value;
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) {
+        msg.innerHTML = `<div class="msg msg-error">${error.message}</div>`;
+        btn.disabled = false; btn.textContent = "Mettre à jour";
+        return;
+      }
+      msg.innerHTML = `<div class="msg msg-success">✓ Mot de passe mis à jour. Redirection…</div>`;
+      setTimeout(() => location.href = "/prototype/", 800);
+    });
+  </script>
+</body>
+</html>
