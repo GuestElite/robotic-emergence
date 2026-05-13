@@ -166,16 +166,21 @@
   </div>
 
   <script type="module">
-    import { supabase, requireSession } from "/lib/supabase.js";
+    import { supabase, getProfile, requireSession } from "/lib/supabase.js";
 
     await requireSession("/auth/login.html?next=" + encodeURIComponent(location.pathname));
 
-    // ─── Chargement profil (avec equipped_skins) ───────────────────
-    const { data: { user } } = await supabase.auth.getUser();
-    const { data: profile } = await supabase.from("re_profiles")
-      .select("id, username, is_admin, currency, current_skin_id, equipped_skins")
-      .eq("id", user.id)
-      .single();
+    // ─── Chargement profil (passe par getProfile qui gère le fallback si
+    //     la migration unit-skins n'a pas encore été exécutée) ───────
+    const profile = await getProfile();
+    if (!profile) {
+      document.body.innerHTML = `<div style="padding: 40px; text-align: center;">
+        <h2>Impossible de charger ton profil</h2>
+        <p class="muted">Réessaie ou contacte le support.</p>
+        <a href="/auth/login.html">Se reconnecter</a>
+      </div>`;
+      throw new Error("Profile load failed");
+    }
 
     document.getElementById("currencyPill").textContent = `${profile.currency} 💰`;
     if (profile.is_admin) {
