@@ -4324,7 +4324,10 @@ function drawUpgradePanel(ctx) {
 function drawModeToggle(ctx, x, y, w, factory, side) {
   const btnW = (w - 8) / 2;
   const btnH = 26;
-  const editable = side === "player";
+  // Editable si la factory appartient à mon camp (player en solo / host,
+  // enemy en guest MP). Avant : forcé à "player" → bug guest qui ne pouvait
+  // pas activer le mode Défense sur ses propres factories.
+  const editable = side === mySide();
   const rects = { attack: null, defense: null };
 
   for (const [i, mode] of ["attack", "defense"].entries()) {
@@ -8674,11 +8677,16 @@ function applyMpSnapshot(snap) {
   game.lightning = snap.lightning ? { ...snap.lightning } : null;
   game.iem = snap.iem ? { ...snap.iem } : null;
   if (snap.cd) {
-    // Sur le guest, "ma" lightning cd est celle de mon côté
-    game.lightningCooldown = snap.cd[mySide()] ?? 0;
+    // On écrit les DEUX cooldowns : player → game.lightningCooldown,
+    // enemy → game.mp.enemyLightningCooldown. Comme ça lightningCdFor()
+    // retourne la bonne valeur peu importe le côté qu'on consulte (et
+    // notamment pour le guest, mySide()="enemy" lit bien sa propre cd).
+    game.lightningCooldown = snap.cd.player ?? 0;
+    if (game.mp) game.mp.enemyLightningCooldown = snap.cd.enemy ?? 0;
   }
   if (snap.iemCd) {
-    game.iemCooldown = snap.iemCd[mySide()] ?? 0;
+    game.iemCooldown = snap.iemCd.player ?? 0;
+    if (game.mp) game.mp.enemyIemCooldown = snap.iemCd.enemy ?? 0;
   }
   if (snap.stats) {
     // Snapshot des stats (host autoritaire) — permet au guest d'avoir un
