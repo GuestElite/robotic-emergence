@@ -474,14 +474,17 @@ function saveSettings() {
 const game = {
   time: 0,
   lastTimestamp: 0,
-  screen: "menu",                 // "menu" | "playing" | "gameOver"
-  difficulty: "normal",           // "easy" | "normal" | "hard"
+  screen: "menu",
+  difficulty: "normal",
   preset: DIFFICULTY_PRESETS.normal,
-  player: null,                   // initialisé au lancement de partie
+  player: null,
   enemy: null,
   units: [],
   attackFx: [],
   explosions: [],
+  lightning: null,                // { x, y1, y2, age, ttl } pendant l'animation
+  lightningCooldown: 0,           // secondes restantes avant la prochaine charge
+  stats: { player: makeStats(), enemy: makeStats() },
   gameOver: null,
   camera: { x: 0 },
   ui: {
@@ -494,10 +497,28 @@ const game = {
     replayBtn: null,
     upgradePanel: null,
     panelRects: null,
-    menuRects: null,              // rects cliquables du menu d'accueil
+    menuRects: null,
     gameOverMenuBtn: null,
+    lightningBtn: null,           // rect du bouton Éclair en HUD
   },
 };
+
+// -------------------------------------------------------------
+// Turret : nouveau type de bâtiment placé sur le rempart
+// -------------------------------------------------------------
+const TURRET_TYPE = {
+  cost: 200,
+  hp: 200,
+  damage: 18,
+  range: 220,
+  attackInterval: 0.9,
+  radius: 12,
+  killReward: 0,
+};
+
+const LIGHTNING_COOLDOWN_SEC = 30;
+const LIGHTNING_KILL_HALF_WIDTH = 70; // moitié largeur de la zone létale (px)
+const LIGHTNING_TTL_SEC = 0.55;
 
 function makeSideState(side) {
   const preset = game.preset;
@@ -506,12 +527,33 @@ function makeSideState(side) {
   return {
     side,
     money: startMoney,
+    startMoney,
     baseHP,
     baseHPMax: baseHP,
     slots: [],
+    wallSlots: [],
     buildTimer: side === "enemy"
       ? preset.aiBuildInterval - AI_CONFIG.firstBuildDelay
       : 0,
+  };
+}
+
+// Stats de partie (reset à chaque startGame)
+function makeStats() {
+  return {
+    moneySpent: 0,
+    factoriesBuilt: 0,
+    upgradesBought: 0,
+    turretsBuilt: 0,
+    unitsSpawned: 0,
+    unitsKilled: 0,
+    unitsLost: 0,
+    damageDealt: 0,
+    damageTaken: 0,
+    borderHits: 0,
+    lightningsUsed: 0,
+    factoriesBuiltByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0 },
+    unitsSpawnedByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0 },
   };
 }
 
@@ -627,6 +669,84 @@ function buildSlots() {
 
   game.player.slots = buildSide("player");
   game.enemy.slots = buildSide("enemy");
+
+  // Wall slots : 1 par rangée non-path (8 slots par camp) — placement de turrets
+  for (const side of ["player", "enemy"]) {
+    const state = game[side];
+    state.wallSlots = [];
+    for (let row = 0; row < CONFIG.GRID_ROWS; row++) {
+      if (CONFIG.PATH_ROWS.includes(row)) continue; // les gates ne reçoivent pas de turret
+      // Y du slot = Y d'un slot de cette row dans la grille (alignement)
+      const gridSlot = state.slots.find((s) => s.row === row && s.col === 0);
+      if (!gridSlot) continue;
+      const wallX = side === "player" ? CONFIG.BASE_W - 22 : CONFIG.W - CONFIG.BASE_W - 2;
+      state.wallSlots.push({
+        row,
+        x: wallX,
+        y: gridSlot.y,
+        w: 24,
+        h: gridSlot.size,
+        turret: null,
+      });
+    }
+  }
+}
+
+function tryPlaceTurret(side, wallSlotIndex) {
+  if (side !== "player") return false;
+  const state = game[side];
+  const slot = state.wallSlots[wallSlotIndex];
+  if (!slot || slot.turret) return false;
+  if (state.money < TURRET_TYPE.cost) return false;
+
+  state.money -= TURRET_TYPE.cost;
+  game.stats[side].moneySpent += TURRET_TYPE.cost;
+  game.stats[side].turretsBuilt++;
+
+  const stats = {
+    hp: TURRET_TYPE.hp,
+    damage: TURRET_TYPE.damage,
+    speed: 0,
+    radius: TURRET_TYPE.radius,
+    range: TURRET_TYPE.range,
+    attackInterval: TURRET_TYPE.attackInterval,
+    killReward: TURRET_TYPE.killReward,
+  };
+  const turret = {
+    side,
+    typeId: "turret",
+    kind: "turret",
+    stationary: true,
+    x: slot.x + slot.w / 2,
+    y: slot.y + slot.h / 2,
+    hp: stats.hp,
+    maxHp: stats.hp,
+    stats,
+    target: null,
+    attackCooldown: 0,
+    wanderY: null,
+    wanderTimer: 0,
+    mode: "defense",
+    exitWaypoints: [],
+    wallSlotRef: slot,
+    totalInvested: TURRET_TYPE.cost,
+  };
+  game.units.push(turret);
+  slot.turret = turret;
+  audio.playSFX("place");
+  return true;
+}
+
+function sellTurret(side, wallSlotIndex) {
+  const state = game[side];
+  const slot = state.wallSlots[wallSlotIndex];
+  if (!slot || !slot.turret) return false;
+  const refund = Math.floor((slot.turret.totalInvested || TURRET_TYPE.cost) * SELL_RATIO);
+  state.money += refund;
+  slot.turret.hp = 0; // sera retirée à la prochaine cleanup
+  slot.turret = null;
+  audio.playSFX("sell");
+  return refund;
 }
 
 // Conservé pour compat : renvoie le Y du gate central (mid).
@@ -639,11 +759,11 @@ function getPathCenterY() {
 // -------------------------------------------------------------
 
 function buildHudButtons() {
-  // 4 boutons côte à côte (raccourcis clavier 1-4)
-  const types = ["light", "heavy", "swarmer", "sniper"];
-  const startX = 150;
-  const btnW = 138;
-  const btnGap = 6;
+  // 5 boutons de construction côte à côte (raccourcis 1-5)
+  const types = ["light", "heavy", "swarmer", "sniper", "turret"];
+  const startX = 130;
+  const btnW = 116;
+  const btnGap = 4;
   game.ui.buttons = types.map((t, i) => ({
     id: `build-${t}`,
     type: t,
@@ -692,6 +812,11 @@ function tryPlaceFactory(side, slotIndex, typeId) {
   if (state.money < type.cost) return false;
 
   state.money -= type.cost;
+  game.stats[side].moneySpent += type.cost;
+  game.stats[side].factoriesBuilt++;
+  if (game.stats[side].factoriesBuiltByType[typeId] != null) {
+    game.stats[side].factoriesBuiltByType[typeId]++;
+  }
   slot.factory = {
     typeId,
     side,
@@ -718,6 +843,8 @@ function tryUpgradeFactory(side, slotIndex, statId) {
   const cost = upgradeCost(stat, lvl);
   if (state.money < cost) return false;
   state.money -= cost;
+  game.stats[side].moneySpent += cost;
+  game.stats[side].upgradesBought++;
   slot.factory.upgrades[statId] = lvl + 1;
   slot.factory.totalInvested += cost;
   audio.playSFX("upgrade");
@@ -758,13 +885,14 @@ function spawnUnitFromFactory(side, slot) {
   const gate = getGateCenter(side, gateRow);
   const stats = spawnStatsFor(factory);
 
-  // Position de spawn = centre du sprite factory (visuellement, le robot "sort" du bâtiment)
   const spawnX = slot.x + slot.size / 2;
   const spawnY = slot.y + slot.size / 2;
 
+  const typeId = FACTORY_TYPES[factory.typeId].unitType;
   game.units.push({
     side,
-    typeId: FACTORY_TYPES[factory.typeId].unitType,
+    typeId,
+    kind: "unit",
     x: spawnX,
     y: spawnY,
     gateY: gate.y,
@@ -776,9 +904,12 @@ function spawnUnitFromFactory(side, slot) {
     wanderY: null,
     wanderTimer: 0,
     mode: factory.mode || "attack",
-    // Waypoints internes pour traverser la base : col PATH_COL → gate row → gate exit
     exitWaypoints: buildInternalWaypoints(side, slot, gateRow),
   });
+  game.stats[side].unitsSpawned++;
+  if (game.stats[side].unitsSpawnedByType[typeId] != null) {
+    game.stats[side].unitsSpawnedByType[typeId]++;
+  }
 }
 
 // Construit la suite de points (x, y) que l'unité va suivre depuis sa factory
@@ -863,8 +994,14 @@ function findTargetFor(u) {
 
 function applyDamage(target, amount, attacker) {
   target.hp -= amount;
+  if (attacker) {
+    game.stats[attacker.side].damageDealt += amount;
+    game.stats[target.side].damageTaken += amount;
+  }
   if (target.hp <= 0 && attacker) {
     game[attacker.side].money += target.stats.killReward;
+    game.stats[attacker.side].unitsKilled++;
+    game.stats[target.side].unitsLost++;
   }
 }
 
@@ -874,7 +1011,7 @@ function spawnExplosion(x, y, side) {
 }
 
 function isExiting(u) {
-  return u.exitWaypoints && u.exitWaypoints.length > 0;
+  return !u.stationary && u.exitWaypoints && u.exitWaypoints.length > 0;
 }
 
 function updateUnits(dt) {
@@ -913,7 +1050,6 @@ function updateUnits(dt) {
     if (u.target && targetIsAlive(u.target)) {
       const d = dist(u.x, u.y, u.target.x, u.target.y);
       if (d <= u.stats.range) {
-        // À portée → tire et reste immobile
         if (u.attackCooldown === 0) {
           applyDamage(u.target, u.stats.damage, u);
           u.attackCooldown = u.stats.attackInterval;
@@ -925,7 +1061,9 @@ function updateUnits(dt) {
         }
         continue;
       }
-      // Cible hors range : poursuit vers elle (vrai pour DEF + pour ATK quand la cible est une menace proche de la base = auto-interception)
+      // Stationnaire (turret) : ne poursuit pas, attend la cible
+      if (u.stationary) continue;
+      // Cible hors range : poursuit (mode def, ou cible menace la base)
       const isDef = u.mode === "defense";
       const isThreat = isThreateningOwnBase(u.target, u.side);
       if (isDef || isThreat) {
@@ -936,8 +1074,10 @@ function updateUnits(dt) {
         u.y += (dy / len) * u.stats.speed * dt;
         continue;
       }
-      // Sinon (mode attaque + cible loin de notre base) : on continue tout droit, on shoot quand on passe à côté
     }
+
+    // Tout mouvement suivant est sauté pour les unités stationnaires
+    if (u.stationary) continue;
 
     // Pas de cible (ou cible attaque non-menaçante) → déplacement par mode
     if (u.mode === "defense") {
@@ -990,22 +1130,22 @@ function updateUnits(dt) {
 
   // 3) Frontière : unité qui atteint le rempart ennemi → suicide (1 HP base) + explosion
   for (const u of game.units) {
-    if (u.hp <= 0 || isExiting(u)) continue;
+    if (u.hp <= 0 || isExiting(u) || u.stationary) continue;
     const borderX = getEnemyBorderX(u.side);
     const reached = u.side === "player" ? u.x >= borderX : u.x <= borderX;
     if (reached) {
       const targetSide = u.side === "player" ? "enemy" : "player";
       game[targetSide].baseHP = Math.max(0, game[targetSide].baseHP - BORDER_HIT_DAMAGE);
+      game.stats[u.side].borderHits++;
       spawnExplosion(u.x, u.y, u.side);
       u.hp = 0;
     }
   }
 
-  // 4) Nettoyage des morts (et explosion visible aussi quand un robot est abattu par un autre)
+  // 4) Nettoyage : libère les wallSlots des turrets détruites, retire les morts
   for (const u of game.units) {
-    if (u.hp <= 0 && !u._explosionFx) {
-      // Évite de doubler avec la frontière qui spawn déjà l'explosion
-      u._explosionFx = true;
+    if (u.hp <= 0 && u.wallSlotRef && u.wallSlotRef.turret === u) {
+      u.wallSlotRef.turret = null;
     }
   }
   game.units = game.units.filter((u) => u.hp > 0);
@@ -1063,6 +1203,11 @@ function updateEnemyAI(dt) {
   const type = FACTORY_TYPES[typeId];
   const slot = buildable[Math.floor(Math.random() * buildable.length)];
   state.money -= type.cost;
+  game.stats.enemy.moneySpent += type.cost;
+  game.stats.enemy.factoriesBuilt++;
+  if (game.stats.enemy.factoriesBuiltByType[typeId] != null) {
+    game.stats.enemy.factoriesBuiltByType[typeId]++;
+  }
   slot.factory = {
     typeId,
     side: "enemy",
@@ -1071,8 +1216,7 @@ function updateEnemyAI(dt) {
     level: 1,
     upgrades: defaultUpgrades(),
     totalInvested: type.cost,
-    // L'IA pose une factory défensive 1 fois sur 4 (rangées proches du rempart)
-    mode: Math.random() < 0.25 ? "defense" : "attack",
+    mode: Math.random() < game.preset.aiDefenseChance ? "defense" : "attack",
   };
   state.buildTimer = 0;
 }
@@ -1083,7 +1227,6 @@ function updateEnemyAI(dt) {
 
 function update(dt) {
   if (game.screen !== "playing" || game.gameOver) {
-    // Resync souris quand même (pour les états menu/gameOver)
     if (game.player) {
       game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
       game.ui.mouse.y = game.ui.mouseScreen.y;
@@ -1092,6 +1235,7 @@ function update(dt) {
   }
   game.time += dt;
   updateCamera(dt);
+  updateLightning(dt);
   updateEnemyAI(dt);
   updateFactories(dt);
   updateUnits(dt);
@@ -1100,6 +1244,56 @@ function update(dt) {
   checkGameOver();
   game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
   game.ui.mouse.y = game.ui.mouseScreen.y;
+}
+
+function updateLightning(dt) {
+  if (game.lightningCooldown > 0) game.lightningCooldown = Math.max(0, game.lightningCooldown - dt);
+  if (!game.lightning) return;
+  game.lightning.age += dt;
+  if (game.lightning.age >= game.lightning.ttl) game.lightning = null;
+}
+
+function triggerLightning() {
+  if (game.lightningCooldown > 0) return false;
+  const centerX = CONFIG.W / 2;
+  const y1 = CONFIG.HUD_H + 20;
+  const y2 = CONFIG.H - 20;
+  game.lightning = { x: centerX, y1, y2, age: 0, ttl: LIGHTNING_TTL_SEC, segments: makeLightningSegments(centerX, y1, y2) };
+  game.lightningCooldown = LIGHTNING_COOLDOWN_SEC;
+  // Tue tout ce qui se trouve dans la bande [centerX - half, centerX + half], sans distinction
+  let killsByPlayer = 0, killsByEnemy = 0;
+  for (const u of game.units) {
+    if (u.hp <= 0) continue;
+    if (u.stationary) continue; // les turrets sur les remparts (loin du milieu) ne sont pas touchées
+    if (Math.abs(u.x - centerX) <= LIGHTNING_KILL_HALF_WIDTH) {
+      u.hp = 0;
+      spawnExplosion(u.x, u.y, u.side);
+      game.stats[u.side].unitsLost++;
+      if (u.side === "player") killsByEnemy++;
+      else killsByPlayer++;
+    }
+  }
+  // L'éclair étant déclenché par le joueur, on compte les kills ennemis tués pour lui
+  game.stats.player.unitsKilled += killsByPlayer;
+  game.stats.enemy.unitsKilled += killsByEnemy; // si l'IA balayait sa propre vague (rare)
+  game.stats.player.lightningsUsed++;
+  audio.playSFX("explosion");
+  audio.playSFX("explosion");
+  return true;
+}
+
+function makeLightningSegments(x, y1, y2) {
+  // Génère une polyligne en zigzag pour le rendu
+  const segs = [{ x, y: y1 }];
+  const steps = 18;
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const yy = y1 + (y2 - y1) * t;
+    const jitter = (Math.random() - 0.5) * 30;
+    segs.push({ x: x + jitter, y: yy });
+  }
+  segs.push({ x, y: y2 });
+  return segs;
 }
 
 function updateCamera(dt) {
@@ -1133,9 +1327,12 @@ function render(ctx) {
   drawBattlefieldLane(ctx);
   drawBase(ctx, "player");
   drawBase(ctx, "enemy");
+  drawWallSlots(ctx, "player");
+  drawWallSlots(ctx, "enemy");
   drawUnits(ctx);
   drawAttackFx(ctx);
   drawExplosions(ctx);
+  drawLightning(ctx);
   ctx.restore();
 
   // UI (coordonnées écran)
@@ -1693,6 +1890,28 @@ function drawUnitPlaceholder(ctx, u, radius) {
   const dark = u.side === "player" ? COLORS.playerDark : COLORS.enemyDark;
   const fwd = u.side === "player" ? 1 : -1;
 
+  if (u.kind === "turret") {
+    // Tourelle automatisée : socle + canon orienté vers la frontière + dôme
+    ctx.fillStyle = dark;
+    ctx.fillRect(u.x - 12, u.y - 4, 24, 18); // socle
+    ctx.fillStyle = main;
+    ctx.beginPath();
+    ctx.arc(u.x, u.y - 4, 9, 0, Math.PI * 2); // dôme
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    // Canon
+    ctx.fillStyle = dark;
+    ctx.fillRect(u.x + (fwd > 0 ? 6 : -16), u.y - 6, 10, 4);
+    // Témoin lumineux
+    ctx.fillStyle = u.attackCooldown > 0 ? "#fbbf24" : "#22c55e";
+    ctx.beginPath();
+    ctx.arc(u.x, u.y - 8, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
   if (u.typeId === "swarmer") {
     // Petit triangle "drone" pointé vers l'avant
     ctx.fillStyle = main;
@@ -2038,6 +2257,99 @@ function formatStatPreview(factory, stat) {
   }
 }
 
+function drawWallSlots(ctx, side) {
+  const state = game[side];
+  if (!state || !state.wallSlots) return;
+  const isPlayer = side === "player";
+  const buildMode = game.ui.selectedBuildType === "turret" && isPlayer;
+
+  for (let i = 0; i < state.wallSlots.length; i++) {
+    const slot = state.wallSlots[i];
+    if (slot.turret) {
+      // Le turret est rendu via drawUnits, ici juste un socle visuel sur le rempart
+      ctx.fillStyle = "rgba(15, 23, 42, 0.8)";
+      ctx.fillRect(slot.x, slot.y + slot.h * 0.25, slot.w, slot.h * 0.5);
+      ctx.strokeStyle = "rgba(255,255,255,0.25)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(slot.x + 0.5, slot.y + 0.5 + slot.h * 0.25, slot.w - 1, slot.h * 0.5 - 1);
+      continue;
+    }
+    if (buildMode) {
+      const hover = game.ui.hoverWallSlot;
+      const isHover = hover && hover.side === "player" && hover.idx === i;
+      const canAfford = game.player.money >= TURRET_TYPE.cost;
+      ctx.fillStyle = isHover
+        ? (canAfford ? "rgba(34, 211, 238, 0.45)" : "rgba(239, 68, 68, 0.40)")
+        : "rgba(34, 211, 238, 0.18)";
+      ctx.fillRect(slot.x, slot.y + slot.h * 0.2, slot.w, slot.h * 0.6);
+      ctx.strokeStyle = "rgba(34, 211, 238, 0.85)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]);
+      ctx.strokeRect(slot.x + 0.5, slot.y + slot.h * 0.2 + 0.5, slot.w - 1, slot.h * 0.6 - 1);
+      ctx.setLineDash([]);
+    }
+  }
+}
+
+function drawLightning(ctx) {
+  if (!game.lightning) return;
+  const fx = game.lightning;
+  const t = fx.age / fx.ttl;
+  const alpha = 1 - Math.pow(t, 0.6);
+
+  // Glow large autour de la bande létale
+  ctx.save();
+  ctx.globalAlpha = alpha * 0.5;
+  ctx.fillStyle = "rgba(165, 220, 255, 0.6)";
+  ctx.fillRect(fx.x - LIGHTNING_KILL_HALF_WIDTH, fx.y1, LIGHTNING_KILL_HALF_WIDTH * 2, fx.y2 - fx.y1);
+  ctx.restore();
+
+  // Plusieurs lignes de zigzag superposées
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.lineCap = "round";
+  for (let pass = 0; pass < 3; pass++) {
+    ctx.beginPath();
+    for (let i = 0; i < fx.segments.length; i++) {
+      const s = fx.segments[i];
+      const jitter = pass === 0 ? 0 : (Math.random() - 0.5) * 12 * (pass);
+      if (i === 0) ctx.moveTo(s.x + jitter, s.y);
+      else ctx.lineTo(s.x + jitter, s.y);
+    }
+    if (pass === 0) {
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 6;
+      ctx.shadowColor = "#a5dcff";
+      ctx.shadowBlur = 30;
+    } else if (pass === 1) {
+      ctx.strokeStyle = "#bee5ff";
+      ctx.lineWidth = 3;
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.strokeStyle = "rgba(165, 220, 255, 0.6)";
+      ctx.lineWidth = 1.5;
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Petits éclats horizontaux
+  ctx.save();
+  ctx.globalAlpha = alpha * 0.8;
+  ctx.strokeStyle = "rgba(220, 240, 255, 0.85)";
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < 6; i++) {
+    const y = fx.y1 + Math.random() * (fx.y2 - fx.y1);
+    const x = fx.x + (Math.random() - 0.5) * 30;
+    const len = 30 + Math.random() * 40;
+    ctx.beginPath();
+    ctx.moveTo(x - len / 2, y);
+    ctx.lineTo(x + len / 2, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawExplosions(ctx) {
   for (const fx of game.explosions) {
     const t = fx.age / fx.ttl; // 0 → 1
@@ -2061,6 +2373,108 @@ function drawExplosions(ctx) {
     }
     ctx.restore();
   }
+}
+
+// -------------------------------------------------------------
+// Rapport de partie (game over overlay)
+// -------------------------------------------------------------
+function drawGameOverReport(ctx) {
+  const PW = 620;
+  const PH = 440;
+  const px = (CONFIG.CANVAS_W - PW) / 2;
+  const py = 160;
+
+  // Fond du panneau
+  ctx.fillStyle = "rgba(15, 20, 25, 0.92)";
+  roundedRect(ctx, px, py, PW, PH, 12);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Header
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 16px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("📊 RAPPORT DE PARTIE", px + PW / 2, py + 12);
+
+  // Colonnes : Label · Joueur · Ennemi
+  const labelX = px + 28;
+  const playerX = px + PW * 0.62;
+  const enemyX = px + PW - 28;
+
+  // Headers de colonne
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.fillText("Stat", labelX, py + 50);
+  ctx.textAlign = "right";
+  ctx.fillStyle = COLORS.player;
+  ctx.fillText("JOUEUR", playerX, py + 50);
+  ctx.fillStyle = COLORS.enemy;
+  ctx.fillText("ENNEMI", enemyX, py + 50);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.10)";
+  ctx.beginPath();
+  ctx.moveTo(px + 20, py + 70);
+  ctx.lineTo(px + PW - 20, py + 70);
+  ctx.stroke();
+
+  const ps = game.stats.player;
+  const es = game.stats.enemy;
+  const min = Math.floor(game.time / 60);
+  const sec = Math.floor(game.time % 60).toString().padStart(2, "0");
+
+  const rows = [
+    { label: "⏱️ Durée",                value: `${min}:${sec}`,                  noBoth: true },
+    { label: "💰 Argent dépensé",        p: ps.moneySpent,                        e: es.moneySpent },
+    { label: "🏭 Factories construites", p: ps.factoriesBuilt,                    e: es.factoriesBuilt },
+    { label: "🗼 Turrets posées",        p: ps.turretsBuilt,                      e: es.turretsBuilt },
+    { label: "⭐ Upgrades achetés",       p: ps.upgradesBought,                    e: es.upgradesBought },
+    { label: "🤖 Unités produites",      p: ps.unitsSpawned,                      e: es.unitsSpawned },
+    { label: "⚔️ Kills",                p: ps.unitsKilled,                       e: es.unitsKilled },
+    { label: "💀 Unités perdues",        p: ps.unitsLost,                         e: es.unitsLost },
+    { label: "💥 Dégâts infligés",       p: Math.round(ps.damageDealt),           e: Math.round(es.damageDealt) },
+    { label: "🛡️ Dégâts subis",         p: Math.round(ps.damageTaken),           e: Math.round(es.damageTaken) },
+    { label: "🏰 Hits frontière",        p: ps.borderHits,                        e: es.borderHits },
+    { label: "⚡ Éclairs utilisés",       p: ps.lightningsUsed,                    e: es.lightningsUsed },
+  ];
+
+  let y = py + 84;
+  const rowH = 22;
+  ctx.font = "13px -apple-system, sans-serif";
+  for (const r of rows) {
+    ctx.fillStyle = COLORS.hudText;
+    ctx.textAlign = "left";
+    ctx.fillText(r.label, labelX, y);
+
+    if (r.noBoth) {
+      ctx.fillStyle = COLORS.hudMuted;
+      ctx.textAlign = "right";
+      ctx.fillText(String(r.value), enemyX, y);
+    } else {
+      // Met en évidence le meilleur (vert) / perdant (gris) sur chaque ligne
+      const better = (r.label.includes("perdues") || r.label.includes("subis"))
+        ? (r.p < r.e ? "player" : (r.p > r.e ? "enemy" : "none"))
+        : (r.p > r.e ? "player" : (r.p < r.e ? "enemy" : "none"));
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = better === "player" ? COLORS.hpGood : COLORS.player;
+      ctx.fillText(String(r.p), playerX, y);
+      ctx.fillStyle = better === "enemy" ? COLORS.hpGood : COLORS.enemy;
+      ctx.fillText(String(r.e), enemyX, y);
+    }
+    y += rowH;
+  }
+
+  // Ratio kills (efficacité)
+  const playerEff = ps.unitsSpawned ? (ps.unitsKilled / ps.unitsSpawned).toFixed(2) : "0.00";
+  const enemyEff = es.unitsSpawned ? (es.unitsKilled / es.unitsSpawned).toFixed(2) : "0.00";
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "italic 11px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(`Ratio kills / units : Joueur ${playerEff} · Ennemi ${enemyEff}`, px + PW / 2, py + PH - 14);
 }
 
 // -------------------------------------------------------------
@@ -2231,7 +2645,7 @@ function wrapText(ctx, text, x, y, maxW, lineH) {
 }
 
 function drawGameOverOverlay(ctx) {
-  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
   ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
 
   const win = game.gameOver.winner === "player";
@@ -2241,14 +2655,17 @@ function drawGameOverOverlay(ctx) {
     : "Ta base a été détruite.";
 
   ctx.fillStyle = win ? COLORS.hpGood : COLORS.enemy;
-  ctx.font = "bold 72px -apple-system, sans-serif";
+  ctx.font = "bold 52px -apple-system, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(title, CONFIG.CANVAS_W / 2, CONFIG.H / 2 - 80);
+  ctx.fillText(title, CONFIG.CANVAS_W / 2, 90);
 
   ctx.fillStyle = COLORS.hudText;
-  ctx.font = "20px -apple-system, sans-serif";
-  ctx.fillText(subtitle, CONFIG.CANVAS_W / 2, CONFIG.H / 2 - 20);
+  ctx.font = "16px -apple-system, sans-serif";
+  ctx.fillText(subtitle, CONFIG.CANVAS_W / 2, 130);
+
+  // Rapport de partie
+  drawGameOverReport(ctx);
 
   // Bouton "Rejouer"
   const btnW = 180;
@@ -2256,7 +2673,7 @@ function drawGameOverOverlay(ctx) {
   const gap = 16;
   const totalW = btnW * 2 + gap;
   const startX = (CONFIG.CANVAS_W - totalW) / 2;
-  const btnY = CONFIG.H / 2 + 30;
+  const btnY = CONFIG.H - 90;
   game.ui.replayBtn = { x: startX, y: btnY, w: btnW, h: btnH };
   game.ui.gameOverMenuBtn = { x: startX + btnW + gap, y: btnY, w: btnW, h: btnH };
 
@@ -2384,8 +2801,9 @@ function drawHUD(ctx) {
   ctx.textBaseline = "middle";
   ctx.fillText(`💰 ${game.player.money}`, 20, CONFIG.HUD_H / 2);
 
-  // Boutons "Construire" (mode build)
+  // Boutons "Construire" (mode build) + bouton spécial éclair
   drawBuildButtons(ctx);
+  drawLightningButton(ctx);
 
   // Argent ennemi (droite)
   ctx.fillStyle = COLORS.enemy;
@@ -2420,9 +2838,13 @@ function drawHUD(ctx) {
 
 function drawBuildButtons(ctx) {
   for (const btn of game.ui.buttons) {
-    const type = FACTORY_TYPES[btn.type];
+    const isTurret = btn.type === "turret";
+    const cost = isTurret ? TURRET_TYPE.cost : FACTORY_TYPES[btn.type].cost;
+    const label = isTurret ? "Turret" : FACTORY_TYPES[btn.type].label;
+    const icon = isTurret ? "🗼" : "🏭";
+
     const isActive = game.ui.selectedBuildType === btn.type;
-    const canAfford = game.player.money >= type.cost;
+    const canAfford = game.player.money >= cost;
     const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, btn);
 
     let fill;
@@ -2440,22 +2862,61 @@ function drawBuildButtons(ctx) {
     ctx.stroke();
 
     ctx.fillStyle = canAfford ? COLORS.hudText : COLORS.hudMuted;
-    ctx.font = "bold 13px -apple-system, sans-serif";
+    ctx.font = "bold 12px -apple-system, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(
-      `🏭 ${type.label}`,
-      btn.x + btn.w / 2 - 22,
-      btn.y + btn.h / 2
-    );
+    ctx.fillText(`${icon} ${label}`, btn.x + btn.w / 2 - 16, btn.y + btn.h / 2);
 
     ctx.fillStyle = canAfford ? "#fbbf24" : COLORS.hudMuted;
     ctx.font = "bold 12px -apple-system, sans-serif";
-    ctx.fillText(
-      `${type.cost}💰`,
-      btn.x + btn.w / 2 + 38,
-      btn.y + btn.h / 2
-    );
+    ctx.fillText(`${cost}💰`, btn.x + btn.w / 2 + 34, btn.y + btn.h / 2);
+  }
+}
+
+function drawLightningButton(ctx) {
+  const btnW = 110;
+  const btnH = 36;
+  const btnX = 130 + 5 * (116 + 4) + 12;
+  const btnY = 12;
+  game.ui.lightningBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
+
+  const ready = game.lightningCooldown <= 0;
+  const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.lightningBtn);
+
+  ctx.save();
+  if (ready) {
+    ctx.fillStyle = isHover ? "rgba(251, 191, 36, 0.55)" : "rgba(251, 191, 36, 0.35)";
+    ctx.shadowColor = "#fbbf24";
+    ctx.shadowBlur = isHover ? 16 : 8;
+  } else {
+    ctx.fillStyle = "rgba(100,116,139,0.22)";
+  }
+  roundedRect(ctx, btnX, btnY, btnW, btnH, 8);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = ready ? "#fbbf24" : "rgba(255,255,255,0.15)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
+
+  // Texte
+  ctx.fillStyle = ready ? "#fff" : COLORS.hudMuted;
+  ctx.font = "bold 13px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  if (ready) {
+    ctx.fillText("⚡ Éclair", btnX + btnW / 2, btnY + btnH / 2);
+  } else {
+    ctx.fillText(`⚡ ${Math.ceil(game.lightningCooldown)}s`, btnX + btnW / 2, btnY + btnH / 2);
+  }
+
+  // Barre de progression du cooldown (en bas du bouton)
+  if (!ready) {
+    const ratio = 1 - game.lightningCooldown / LIGHTNING_COOLDOWN_SEC;
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(btnX + 2, btnY + btnH - 4, btnW - 4, 2);
+    ctx.fillStyle = "#fbbf24";
+    ctx.fillRect(btnX + 2, btnY + btnH - 4, (btnW - 4) * ratio, 2);
   }
 }
 
@@ -2529,6 +2990,19 @@ function setupInput(canvas) {
     } else {
       idx = findSlotAt("enemy", wx, wy);
       game.ui.hoverSlot = idx >= 0 ? { side: "enemy", slotIndex: idx } : null;
+    }
+
+    // Hover wall slot (côté joueur uniquement, pour placement turret)
+    game.ui.hoverWallSlot = null;
+    if (game.ui.selectedBuildType === "turret") {
+      const wallSlots = game.player.wallSlots || [];
+      for (let i = 0; i < wallSlots.length; i++) {
+        const s = wallSlots[i];
+        if (wx >= s.x && wx <= s.x + s.w && wy >= s.y && wy <= s.y + s.h) {
+          game.ui.hoverWallSlot = { side: "player", idx: i };
+          break;
+        }
+      }
     }
   });
 
@@ -2632,18 +3106,38 @@ function setupInput(canvas) {
       }
     }
 
-    // 1) Click sur un bouton de build (coords ÉCRAN) ?
+    // 1) Bouton Éclair (coords ÉCRAN) ?
+    if (game.ui.lightningBtn && pointInRect(sx, sy, game.ui.lightningBtn)) {
+      triggerLightning();
+      return;
+    }
+
+    // 2) Boutons de build (coords ÉCRAN) ?
     for (const btn of game.ui.buttons) {
       if (pointInRect(sx, sy, btn)) {
-        const type = FACTORY_TYPES[btn.type];
-        if (game.player.money < type.cost) return;
+        const cost = btn.type === "turret" ? TURRET_TYPE.cost : FACTORY_TYPES[btn.type].cost;
+        if (game.player.money < cost) return;
         game.ui.selectedBuildType =
           game.ui.selectedBuildType === btn.type ? null : btn.type;
         return;
       }
     }
 
-    // 2) Click sur un slot joueur (coords MONDE) ?
+    // 3) Placement turret sur wall slot (mode build turret actif) ?
+    if (game.ui.selectedBuildType === "turret") {
+      const wallSlots = game.player.wallSlots || [];
+      for (let i = 0; i < wallSlots.length; i++) {
+        const s = wallSlots[i];
+        if (wx >= s.x && wx <= s.x + s.w && wy >= s.y && wy <= s.y + s.h) {
+          if (tryPlaceTurret("player", i)) {
+            if (game.player.money < TURRET_TYPE.cost) game.ui.selectedBuildType = null;
+          }
+          return;
+        }
+      }
+    }
+
+    // 4) Click sur un slot joueur (coords MONDE) ?
     const playerSlotIdx = findSlotAt("player", wx, wy);
     if (playerSlotIdx >= 0) {
       const slot = game.player.slots[playerSlotIdx];
@@ -2692,10 +3186,14 @@ function setupInput(canvas) {
       game.ui.selectedBuildType = null;
       game.ui.upgradePanel = null;
     }
-    const keyMap = { "1": "light", "2": "heavy", "3": "swarmer", "4": "sniper" };
+    const keyMap = { "1": "light", "2": "heavy", "3": "swarmer", "4": "sniper", "5": "turret" };
     if (keyMap[evt.key]) {
       const t = keyMap[evt.key];
       game.ui.selectedBuildType = game.ui.selectedBuildType === t ? null : t;
+    }
+    // Éclair
+    if (evt.key === "l" || evt.key === "L") {
+      triggerLightning();
     }
     // Scroll au clavier (flèches ← → ou A/D)
     const SCROLL_STEP = 120;
@@ -2725,14 +3223,17 @@ function resetGame() {
   game.units = [];
   game.attackFx = [];
   game.explosions = [];
+  game.lightning = null;
+  game.lightningCooldown = 0;
+  game.stats = { player: makeStats(), enemy: makeStats() };
   game.gameOver = null;
   game.camera.x = 0;
   game.ui.selectedBuildType = null;
   game.ui.hoverSlot = null;
+  game.ui.hoverWallSlot = null;
   game.ui.replayBtn = null;
   game.ui.upgradePanel = null;
   game.ui.panelRects = null;
-  // Synchro AI_CONFIG depuis le preset courant (utilisé par updateEnemyAI)
   AI_CONFIG.buildInterval = game.preset.aiBuildInterval;
   AI_CONFIG.typeWeights = { ...game.preset.aiTypeWeights };
   buildSlots();
