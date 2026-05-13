@@ -233,20 +233,27 @@ def sfx_unit_crash_rampart():
 
 
 def sfx_effect_lightning():
-    """Foudre : crack initial + rumble basse + queue de bruit filtré, 0.7s."""
-    crack = noise(0.06, amp=0.85, seed=5)
-    crack = envelope_ad(crack, attack_s=0.001, release_s=0.04)
-    rumble = mix(sine(48, 0.7, amp=0.45), sine(72, 0.7, amp=0.3))
-    rumble = exp_decay(rumble, decay_rate=2.5)
-    tail = noise(0.55, amp=0.35, seed=6)
-    tail = lowpass(tail, window=25)
-    tail = exp_decay(tail, decay_rate=3)
-    # Assemblage : crack en premier, rumble + tail décalés
-    crack_padded = list(crack) + [0.0] * int(0.65 * SAMPLE_RATE)
-    rumble_padded = [0.0] * int(0.04 * SAMPLE_RATE) + list(rumble)
-    tail_padded = [0.0] * int(0.08 * SAMPLE_RATE) + list(tail)
-    s = mix(crack_padded, rumble_padded, tail_padded)
-    return envelope_ad(s, attack_s=0.001, release_s=0.15)
+    """Foudre : crack initial + rumble basse profond + queue longue, ~1.5s."""
+    # Crack initial (court mais punchy)
+    crack = noise(0.08, amp=0.9, seed=5)
+    crack = envelope_ad(crack, attack_s=0.001, release_s=0.05)
+    # Double rumble (48Hz + 72Hz) qui décroît lentement → impression de tonnerre roulant
+    rumble = mix(sine(48, 1.3, amp=0.50), sine(72, 1.3, amp=0.32))
+    rumble = exp_decay(rumble, decay_rate=1.6)
+    # Tail de bruit filtré (vent / écho lointain) plus long
+    tail = noise(1.1, amp=0.38, seed=6)
+    tail = lowpass(tail, window=30)
+    tail = exp_decay(tail, decay_rate=1.8)
+    # Ajout d'un sub-rumble très grave qui traîne jusqu'à la fin (terre qui tremble)
+    sub = sine(36, 1.4, amp=0.30)
+    sub = exp_decay(sub, decay_rate=1.2)
+    # Assemblage : crack devant, le reste décalé pour donner un effet d'écho
+    crack_padded = list(crack) + [0.0] * int(1.45 * SAMPLE_RATE)
+    rumble_padded = [0.0] * int(0.05 * SAMPLE_RATE) + list(rumble)
+    tail_padded = [0.0] * int(0.10 * SAMPLE_RATE) + list(tail)
+    sub_padded = [0.0] * int(0.04 * SAMPLE_RATE) + list(sub)
+    s = mix(crack_padded, rumble_padded, tail_padded, sub_padded)
+    return envelope_ad(s, attack_s=0.001, release_s=0.25)
 
 
 # ---------------------------------------------------------------------------

@@ -509,6 +509,7 @@ const game = {
   explosions: [],
   lightning: null,                // { x, y1, y2, age, ttl } pendant l'animation
   lightningCooldown: 0,           // secondes restantes avant la prochaine charge
+  lightningAiming: false,         // true = curseur de visée actif, attend un clic sur la map
   stats: { player: makeStats(), enemy: makeStats() },
   gameOver: null,
   camera: { x: 0 },
@@ -1336,19 +1337,34 @@ function updateLightning(dt) {
   if (game.lightning.age >= game.lightning.ttl) game.lightning = null;
 }
 
-function triggerLightning() {
+// Toggle du mode de visée (clic bouton Éclair / touche L)
+function toggleLightningAim() {
+  if (game.lightningAiming) {
+    game.lightningAiming = false;  // cancel
+    return false;
+  }
   if (game.lightningCooldown > 0) return false;
-  const centerX = CONFIG.W / 2;
+  game.lightningAiming = true;
+  return true;
+}
+
+// Tire la foudre à une position X donnée (le joueur a cliqué sur la map en aim mode)
+function fireLightningAt(targetX) {
+  if (game.lightningCooldown > 0) return false;
+  // Clamp pour rester dans la zone de jeu
+  const margin = LIGHTNING_KILL_HALF_WIDTH;
+  const x = Math.max(margin, Math.min(CONFIG.W - margin, targetX));
   const y1 = CONFIG.HUD_H + 20;
   const y2 = CONFIG.H - 20;
-  game.lightning = { x: centerX, y1, y2, age: 0, ttl: LIGHTNING_TTL_SEC, segments: makeLightningSegments(centerX, y1, y2) };
+  game.lightning = { x, y1, y2, age: 0, ttl: LIGHTNING_TTL_SEC, segments: makeLightningSegments(x, y1, y2) };
   game.lightningCooldown = LIGHTNING_COOLDOWN_SEC;
-  // Tue tout ce qui se trouve dans la bande [centerX - half, centerX + half], sans distinction
+  game.lightningAiming = false;
+  // Tue tout ce qui se trouve dans la bande [x - half, x + half]
   let killsByPlayer = 0, killsByEnemy = 0;
   for (const u of game.units) {
     if (u.hp <= 0) continue;
-    if (u.stationary) continue; // les turrets sur les remparts (loin du milieu) ne sont pas touchées
-    if (Math.abs(u.x - centerX) <= LIGHTNING_KILL_HALF_WIDTH) {
+    if (u.stationary) continue; // les turrets sur les remparts ne sont pas touchées
+    if (Math.abs(u.x - x) <= LIGHTNING_KILL_HALF_WIDTH) {
       u.hp = 0;
       spawnExplosion(u.x, u.y, u.side);
       game.stats[u.side].unitsLost++;
@@ -1356,9 +1372,8 @@ function triggerLightning() {
       else killsByPlayer++;
     }
   }
-  // L'éclair étant déclenché par le joueur, on compte les kills ennemis tués pour lui
   game.stats.player.unitsKilled += killsByPlayer;
-  game.stats.enemy.unitsKilled += killsByEnemy; // si l'IA balayait sa propre vague (rare)
+  game.stats.enemy.unitsKilled += killsByEnemy;
   game.stats.player.lightningsUsed++;
   audio.playSFX("lightning");
   return true;
@@ -1425,6 +1440,7 @@ function render(ctx) {
   drawAttackFx(ctx);
   drawExplosions(ctx);
   drawLightning(ctx);
+  drawLightningAim(ctx);
   ctx.restore();
 
   // UI (coordonnées écran)
@@ -2628,6 +2644,45 @@ function drawWallSlots(ctx, side) {
   }
 }
 
+// Curseur de visée pendant le mode aim — bande verticale qui montre où la foudre frappera
+function drawLightningAim(ctx) {
+  if (!game.lightningAiming) return;
+  // Position cible = mouseWorld.x (clampé pour rester dans la zone valide)
+  const margin = LIGHTNING_KILL_HALF_WIDTH;
+  const x = Math.max(margin, Math.min(CONFIG.W - margin, game.ui.mouse.x));
+  const y1 = CONFIG.HUD_H + 20;
+  const y2 = CONFIG.H - 20;
+  const t = (performance.now() / 250) % (Math.PI * 2);
+  const pulse = 0.55 + 0.25 * Math.sin(t); // léger pulse
+
+  ctx.save();
+  // Bande létale (jaune semi-transparent)
+  ctx.fillStyle = `rgba(251, 191, 36, ${0.18 * pulse})`;
+  ctx.fillRect(x - LIGHTNING_KILL_HALF_WIDTH, y1, LIGHTNING_KILL_HALF_WIDTH * 2, y2 - y1);
+  // Bords de la zone
+  ctx.strokeStyle = `rgba(251, 191, 36, ${0.85 * pulse})`;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(x - LIGHTNING_KILL_HALF_WIDTH, y1, LIGHTNING_KILL_HALF_WIDTH * 2, y2 - y1);
+  ctx.setLineDash([]);
+  // Crosshair au centre
+  ctx.strokeStyle = "rgba(251, 191, 36, 0.95)";
+  ctx.lineWidth = 2;
+  const cy = (y1 + y2) / 2;
+  ctx.beginPath();
+  ctx.moveTo(x - 14, cy); ctx.lineTo(x - 4, cy);
+  ctx.moveTo(x + 4, cy);  ctx.lineTo(x + 14, cy);
+  ctx.moveTo(x, cy - 14); ctx.lineTo(x, cy - 4);
+  ctx.moveTo(x, cy + 4);  ctx.lineTo(x, cy + 14);
+  ctx.stroke();
+  // Cercle central
+  ctx.beginPath();
+  ctx.arc(x, cy, 3, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(251, 191, 36, 1)";
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawLightning(ctx) {
   if (!game.lightning) return;
   const fx = game.lightning;
@@ -3222,10 +3277,17 @@ function drawLightningButton(ctx) {
   game.ui.lightningBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
 
   const ready = game.lightningCooldown <= 0;
+  const aiming = game.lightningAiming;
   const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.lightningBtn);
 
   ctx.save();
-  if (ready) {
+  if (aiming) {
+    // Mode visée actif : pulse fort, couleur saturée
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 200);
+    ctx.fillStyle = `rgba(251, 191, 36, ${0.55 + 0.25 * pulse})`;
+    ctx.shadowColor = "#fbbf24";
+    ctx.shadowBlur = 18 + 8 * pulse;
+  } else if (ready) {
     ctx.fillStyle = isHover ? "rgba(251, 191, 36, 0.55)" : "rgba(251, 191, 36, 0.35)";
     ctx.shadowColor = "#fbbf24";
     ctx.shadowBlur = isHover ? 16 : 8;
@@ -3241,11 +3303,13 @@ function drawLightningButton(ctx) {
   ctx.restore();
 
   // Texte
-  ctx.fillStyle = ready ? "#fff" : COLORS.hudMuted;
+  ctx.fillStyle = (ready || aiming) ? "#fff" : COLORS.hudMuted;
   ctx.font = "bold 13px -apple-system, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  if (ready) {
+  if (aiming) {
+    ctx.fillText("⚡ Visez…", btnX + btnW / 2, btnY + btnH / 2);
+  } else if (ready) {
     ctx.fillText("⚡ Éclair", btnX + btnW / 2, btnY + btnH / 2);
   } else {
     ctx.fillText(`⚡ ${Math.ceil(game.lightningCooldown)}s`, btnX + btnW / 2, btnY + btnH / 2);
@@ -3451,9 +3515,20 @@ function setupInput(canvas) {
       }
     }
 
-    // 1) Bouton Éclair (coords ÉCRAN) ?
+    // 1) Bouton Éclair (coords ÉCRAN) ? → toggle du mode visée
     if (game.ui.lightningBtn && pointInRect(sx, sy, game.ui.lightningBtn)) {
-      triggerLightning();
+      toggleLightningAim();
+      audio.playSFX("click");
+      return;
+    }
+
+    // 1bis) Pendant le mode visée : clic sur la map = tir, clic ailleurs = annule
+    if (game.lightningAiming) {
+      if (sy >= CONFIG.HUD_H) {
+        fireLightningAt(wx);
+      } else {
+        game.lightningAiming = false;
+      }
       return;
     }
 
@@ -3556,9 +3631,13 @@ function setupInput(canvas) {
       const t = keyMap[evt.key];
       game.ui.selectedBuildType = game.ui.selectedBuildType === t ? null : t;
     }
-    // Éclair
+    // Éclair → toggle du mode visée (puis clic sur la map pour tirer)
     if (evt.key === "l" || evt.key === "L") {
-      triggerLightning();
+      toggleLightningAim();
+    }
+    // Echap → annule le mode visée
+    if (evt.key === "Escape" && game.lightningAiming) {
+      game.lightningAiming = false;
     }
     // Scroll au clavier (flèches ← → ou A/D)
     const SCROLL_STEP = 120;
