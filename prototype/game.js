@@ -2449,6 +2449,7 @@ function update(dt) {
   // En MP host, on désactive le bot : c'est le guest qui joue le côté enemy.
   if (game.mode !== "mp") updateEnemyAI(dt);
   if (game.wave?.active && typeof updateWaveSpawning === "function") updateWaveSpawning(dt);
+  updateIncome(dt);
   updateFactories(dt);
   updateUnits(dt);
   resolvePropCollisions();
@@ -2474,6 +2475,28 @@ function update(dt) {
       game.mp.snapAccum = 0;
       try { window.RE_MP.sendSnapshot(buildMpSnapshot()); } catch (e) { console.warn("[MP] snapshot send", e); }
     }
+  }
+}
+
+// Revenu passif : chaque seconde, les deux camps gagnent un revenu de base.
+// Un bonus "comeback" est ajouté au camp qui a moins d'argent que l'adversaire
+// (1💰/s par tranche de 50💰 d'écart, plafonné à +6) pour qu'une partie
+// déséquilibrée laisse une chance de se refaire.
+function updateIncome(dt) {
+  game.incomeAccum = (game.incomeAccum || 0) + dt;
+  if (game.incomeAccum < 1) return;
+  const ticks = Math.floor(game.incomeAccum);
+  game.incomeAccum -= ticks;
+  const BASE_INCOME = 2;
+  const BONUS_PER_GAP = 50;
+  const BONUS_CAP = 6;
+  for (let t = 0; t < ticks; t++) {
+    const pMoney = game.player.money;
+    const eMoney = game.enemy.money;
+    const playerBonus = Math.min(BONUS_CAP, Math.floor(Math.max(0, eMoney - pMoney) / BONUS_PER_GAP));
+    const enemyBonus = Math.min(BONUS_CAP, Math.floor(Math.max(0, pMoney - eMoney) / BONUS_PER_GAP));
+    game.player.money += BASE_INCOME + playerBonus;
+    game.enemy.money += BASE_INCOME + enemyBonus;
   }
 }
 
@@ -6600,14 +6623,22 @@ function setupInput(canvas) {
         }
       }
       if (!isTurretPanel && sel.side === mineSide && pr.mode) {
+        const applyMode = (newMode) => {
+          if (isGuestMp) {
+            window.RE_MP.sendInput({ type: "set_factory_mode", slotIndex: sel.slotIndex, mode: newMode });
+          } else {
+            const slot = game[mineSide].slots[sel.slotIndex];
+            if (slot?.factory) slot.factory.mode = newMode;
+          }
+        };
         if (pr.mode.attack && pointInRect(sx, sy, pr.mode.attack)) {
-          const slot = game[mineSide].slots[sel.slotIndex];
-          if (slot?.factory) slot.factory.mode = "attack";
+          applyMode("attack");
+          audio.playSFX("click");
           return;
         }
         if (pr.mode.defense && pointInRect(sx, sy, pr.mode.defense)) {
-          const slot = game[mineSide].slots[sel.slotIndex];
-          if (slot?.factory) slot.factory.mode = "defense";
+          applyMode("defense");
+          audio.playSFX("click");
           return;
         }
       }
@@ -7019,6 +7050,7 @@ function setupInput(canvas) {
 function resetGame() {
   game.time = 0;
   game.lastTimestamp = 0;
+  game.incomeAccum = 0;
   game.player = makeSideState("player");
   game.enemy = makeSideState("enemy");
   game.units = [];
@@ -8815,6 +8847,13 @@ function handleMpInput(input) {
     case "merge_factory":
       tryMergeFactories(side, input.slotIndex, input.partnerIdx);
       break;
+    case "set_factory_mode": {
+      const slot = game[side].slots[input.slotIndex];
+      if (slot?.factory && (input.mode === "attack" || input.mode === "defense")) {
+        slot.factory.mode = input.mode;
+      }
+      break;
+    }
     default:
       console.warn("[MP] input inconnu:", input);
   }
