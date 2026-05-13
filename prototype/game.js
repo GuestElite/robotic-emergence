@@ -3455,7 +3455,9 @@ function drawSettingsPanel(ctx) {
   if (!game.ui.settingsOpen) { game.ui.settingsRects = null; return; }
 
   const PW = 360;
-  const PH = 280;
+  // Hauteur augmentée si on est en partie (pour caser le bouton "Quitter la partie")
+  const inGame = game.screen === "playing" && !game.gameOver;
+  const PH = inGame ? 360 : 280;
   const px = (CONFIG.CANVAS_W - PW) / 2;
   const py = (CONFIG.H - PH) / 2;
 
@@ -3511,6 +3513,39 @@ function drawSettingsPanel(ctx) {
   ctx.textAlign = "right";
   ctx.fillText(`${Math.round(audio.sfxVolume * 100)}%`, px + PW - 24, yy + 38);
 
+  // Bouton "Quitter la partie" (visible uniquement en jeu)
+  let quitRect = null;
+  if (inGame) {
+    // Séparateur
+    const sepY = py + 196;
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(px + 20, sepY);
+    ctx.lineTo(px + PW - 20, sepY);
+    ctx.stroke();
+
+    quitRect = { x: px + 24, y: py + 212, w: PW - 48, h: 44 };
+    const quitHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, quitRect);
+    ctx.fillStyle = quitHover ? "rgba(239, 68, 68, 0.45)" : "rgba(239, 68, 68, 0.25)";
+    roundedRect(ctx, quitRect.x, quitRect.y, quitRect.w, quitRect.h, 8);
+    ctx.fill();
+    ctx.strokeStyle = COLORS.enemy;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 14px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("☰  Quitter la partie", quitRect.x + quitRect.w / 2, quitRect.y + quitRect.h / 2);
+
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.font = "10px -apple-system, sans-serif";
+    ctx.textBaseline = "top";
+    ctx.fillText("Retour au menu principal — la partie en cours est abandonnée", px + PW / 2, quitRect.y + quitRect.h + 8);
+  }
+
   ctx.fillStyle = COLORS.hudMuted;
   ctx.font = "11px -apple-system, sans-serif";
   ctx.textAlign = "center";
@@ -3522,6 +3557,7 @@ function drawSettingsPanel(ctx) {
     close: closeRect,
     musicToggle, sfxToggle,
     musicSlider, sfxSlider,
+    quit: quitRect,
   };
 }
 
@@ -3861,6 +3897,13 @@ function setupInput(canvas) {
       const sr = game.ui.settingsRects;
       if (pointInRect(sx, sy, sr.close)) {
         game.ui.settingsOpen = false; saveSettings(); return;
+      }
+      if (sr.quit && pointInRect(sx, sy, sr.quit)) {
+        audio.playSFX("click");
+        game.ui.settingsOpen = false;
+        saveSettings();
+        goToMenu();
+        return;
       }
       if (pointInRect(sx, sy, sr.musicToggle)) {
         audio.setMusicEnabled(!audio.musicEnabled);
