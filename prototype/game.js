@@ -1300,12 +1300,22 @@ function updateCamera(dt) {
   const margin = CONFIG.CAMERA_SCROLL_MARGIN;
   const speed = CONFIG.CAMERA_SCROLL_SPEED;
   const sx = game.ui.mouseScreen.x;
+  const sy = game.ui.mouseScreen.y;
   const cw = CONFIG.CANVAS_W;
 
-  if (game.ui.mouseInside && sx >= 0 && sx < margin) {
+  // 1) Si la souris survole une zone UI (HUD, panneau d'upgrade, game over,
+  //    minimap, boutons), on coupe l'auto-scroll pour éviter d'emporter la
+  //    map quand on clique sur ces éléments.
+  const overHud = sy < CONFIG.HUD_H;
+  const panelGeo = game.ui.upgradePanel ? getPanelGeometry() : null;
+  const overPanel = panelGeo && pointInRect(sx, sy, panelGeo);
+  const overGameOver = !!game.gameOver;
+  if (!game.ui.mouseInside || overHud || overPanel || overGameOver) return;
+
+  if (sx >= 0 && sx < margin) {
     const intensity = 1 - sx / margin;
     game.camera.x -= speed * intensity * dt;
-  } else if (game.ui.mouseInside && sx > cw - margin && sx <= cw) {
+  } else if (sx > cw - margin && sx <= cw) {
     const intensity = (sx - (cw - margin)) / margin;
     game.camera.x += speed * intensity * dt;
   }
