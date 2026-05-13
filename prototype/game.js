@@ -267,13 +267,53 @@ const DIFFICULTY_PRESETS = {
 // -------------------------------------------------------------
 // Audio (Web Audio API — pas de fichier à charger, tout est synthétisé)
 // -------------------------------------------------------------
+// Sons WAV synthétisés (préchargés depuis 11-sound-design/sfx/).
+// Quand un type est présent ici, on joue le WAV au lieu de l'oscillateur de fallback.
+const SFX_WAV_FILES = {
+  "shoot-light":   "unit-light-shoot.wav",
+  "shoot-heavy":   "unit-heavy-shoot.wav",
+  "shoot-swarmer": "unit-swarmer-shoot.wav",
+  "shoot-sniper":  "unit-sniper-shoot.wav",
+  "death":         "unit-death.wav",
+  "crash":         "unit-crash-rampart.wav",
+  "lightning":     "effect-lightning.wav",
+};
+
+const SFX_WAV_VOLUMES = {
+  "shoot-light":   0.40,
+  "shoot-heavy":   0.40,
+  "shoot-swarmer": 0.22,  // tir spammé → volume réduit
+  "shoot-sniper":  0.50,
+  "death":         0.45,
+  "crash":         0.70,  // boom — laisser claquer
+  "lightning":     0.65,
+};
+
 const audio = {
   ctx: null,
   musicEnabled: true,
   sfxEnabled: true,
-  musicMaster: null,   // GainNode pour la musique
-  musicNodes: [],      // oscillators de la musique
+  musicMaster: null,   // GainNode pour la musique synth (fallback uniquement)
+  musicNodes: [],      // oscillators du fallback synth
+  bgmAudio: null,      // HTMLAudioElement pour la BGM Pathfinder
+  bgmVolume: 0.22,
+  wavBuffers: {},      // cache AudioBuffer par type
   lastSfxTime: {},     // throttle par type de SFX
+  async preloadWavs() {
+    const ctx = this.ensureCtx();
+    if (!ctx) return;
+    const entries = Object.entries(SFX_WAV_FILES);
+    await Promise.all(entries.map(async ([type, file]) => {
+      try {
+        const res = await fetch(`../11-sound-design/sfx/${file}`);
+        const arr = await res.arrayBuffer();
+        this.wavBuffers[type] = await ctx.decodeAudioData(arr);
+      } catch (e) {
+        console.warn(`[Audio] échec chargement ${file} :`, e);
+        this.wavBuffers[type] = null;
+      }
+    }));
+  },
   ensureCtx() {
     if (!this.ctx) {
       try {
@@ -291,12 +331,29 @@ const audio = {
     if (!this.sfxEnabled) return;
     const ctx = this.ensureCtx();
     if (!ctx) return;
-    // Throttle : pas plus d'un même SFX par 60ms (sauf cas critique)
+    // Throttle par type
     const now = ctx.currentTime;
-    const minGap = type === "explosion" ? 0.18 : 0.06;
+    let minGap = 0.06;
+    if (type === "explosion" || type === "crash" || type === "lightning") minGap = 0.18;
+    else if (type === "death") minGap = 0.08;
     if (this.lastSfxTime[type] && now - this.lastSfxTime[type] < minGap) return;
     this.lastSfxTime[type] = now;
 
+    // 1) Si un WAV est chargé pour ce type → on le joue (sons réels)
+    const buf = this.wavBuffers[type];
+    if (buf) {
+      try {
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        const g = ctx.createGain();
+        g.gain.value = SFX_WAV_VOLUMES[type] != null ? SFX_WAV_VOLUMES[type] : 0.4;
+        src.connect(g).connect(ctx.destination);
+        src.start(0);
+      } catch (_) {}
+      return;
+    }
+
+    // 2) Sinon → fallback oscillator (sons UI comme "click", "place", "upgrade", etc.)
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain).connect(ctx.destination);
@@ -381,54 +438,22 @@ const audio = {
     }
   },
   startMusic() {
-    if (!this.musicEnabled || this.musicNodes.length > 0) return;
-    const ctx = this.ensureCtx();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const master = ctx.createGain();
-    master.gain.setValueAtTime(0, now);
-    master.gain.linearRampToValueAtTime(0.06, now + 1.5);
-    master.connect(ctx.destination);
-    this.musicMaster = master;
-
-    // Drone à 3 voix (do — sol — mi) avec léger détune
-    const freqs = [110, 165, 220];
-    for (const f of freqs) {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = "sawtooth";
-      o.frequency.setValueAtTime(f, now);
-      // LFO sur la fréquence pour donner un peu de vie
-      const lfo = ctx.createOscillator();
-      const lfoGain = ctx.createGain();
-      lfo.frequency.setValueAtTime(0.15 + Math.random() * 0.2, now);
-      lfoGain.gain.setValueAtTime(2.5, now);
-      lfo.connect(lfoGain).connect(o.frequency);
-      g.gain.setValueAtTime(0.5, now);
-      // Filtre passe-bas pour adoucir
-      const filter = ctx.createBiquadFilter();
-      filter.type = "lowpass";
-      filter.frequency.setValueAtTime(600, now);
-      o.connect(filter).connect(g).connect(master);
-      o.start(now);
-      lfo.start(now);
-      this.musicNodes.push(o, lfo);
+    if (!this.musicEnabled) return;
+    if (this.bgmAudio && !this.bgmAudio.paused) return;
+    // BGM = "Pathfinder" par Scott Buckley (CC-BY 4.0)
+    if (!this.bgmAudio) {
+      this.bgmAudio = new Audio("../11-sound-design/music/bgm-pathfinder.mp3");
+      this.bgmAudio.loop = true;
+      this.bgmAudio.volume = this.bgmVolume;
     }
+    this.bgmAudio.play().catch(() => {
+      // Autoplay bloqué → ressayera après la prochaine interaction
+    });
   },
   stopMusic() {
-    if (!this.musicMaster) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
-    this.musicMaster.gain.cancelScheduledValues(now);
-    this.musicMaster.gain.setValueAtTime(this.musicMaster.gain.value, now);
-    this.musicMaster.gain.linearRampToValueAtTime(0.0001, now + 0.5);
-    setTimeout(() => {
-      for (const n of this.musicNodes) {
-        try { n.stop(); } catch (_) {}
-      }
-      this.musicNodes = [];
-      this.musicMaster = null;
-    }, 600);
+    if (this.bgmAudio) {
+      try { this.bgmAudio.pause(); this.bgmAudio.currentTime = 0; } catch (_) {}
+    }
   },
   setMusicEnabled(on) {
     this.musicEnabled = on;
@@ -577,6 +602,10 @@ const SPRITE_FILES = [
   "factory-light-enemy",
   "factory-heavy-player",
   "factory-heavy-enemy",
+  "factory-swarmer-player",
+  "factory-swarmer-enemy",
+  "factory-sniper-player",
+  "factory-sniper-enemy",
   "unit-light-player",
   "unit-light-enemy",
   "unit-heavy-player",
@@ -585,6 +614,7 @@ const SPRITE_FILES = [
   "unit-swarmer-enemy",
   "unit-sniper-player",
   "unit-sniper-enemy",
+  "effect-explosion",
 ];
 
 const sprites = {};
@@ -1040,21 +1070,26 @@ function findTargetFor(u) {
 }
 
 function applyDamage(target, amount, attacker) {
+  const wasAlive = target.hp > 0;
   target.hp -= amount;
   if (attacker) {
     game.stats[attacker.side].damageDealt += amount;
     game.stats[target.side].damageTaken += amount;
   }
-  if (target.hp <= 0 && attacker) {
-    game[attacker.side].money += target.stats.killReward;
-    game.stats[attacker.side].unitsKilled++;
-    game.stats[target.side].unitsLost++;
+  if (target.hp <= 0 && wasAlive) {
+    if (attacker) {
+      game[attacker.side].money += target.stats.killReward;
+      game.stats[attacker.side].unitsKilled++;
+      game.stats[target.side].unitsLost++;
+    }
+    audio.playSFX("death");
   }
 }
 
 function spawnExplosion(x, y, side) {
   game.explosions.push({ x, y, age: 0, ttl: 0.45, side });
-  audio.playSFX("explosion");
+  // L'audio (death / crash / lightning) est joué par le code appelant pour
+  // pouvoir distinguer les contextes (combat vs rempart vs éclair).
 }
 
 function isExiting(u) {
@@ -1104,7 +1139,7 @@ function updateUnits(dt) {
             x1: u.x, y1: u.y, x2: u.target.x, y2: u.target.y,
             age: 0, ttl: 0.12, side: u.side,
           });
-          audio.playSFX("shot");
+          audio.playSFX(`shoot-${u.typeId}`);
         }
         continue;
       }
@@ -1185,6 +1220,7 @@ function updateUnits(dt) {
       game[targetSide].baseHP = Math.max(0, game[targetSide].baseHP - BORDER_HIT_DAMAGE);
       game.stats[u.side].borderHits++;
       spawnExplosion(u.x, u.y, u.side);
+      audio.playSFX("crash");
       u.hp = 0;
     }
   }
@@ -1324,8 +1360,7 @@ function triggerLightning() {
   game.stats.player.unitsKilled += killsByPlayer;
   game.stats.enemy.unitsKilled += killsByEnemy; // si l'IA balayait sa propre vague (rare)
   game.stats.player.lightningsUsed++;
-  audio.playSFX("explosion");
-  audio.playSFX("explosion");
+  audio.playSFX("lightning");
   return true;
 }
 
@@ -3617,9 +3652,9 @@ async function boot() {
   setupInput(canvas);
 
   try {
-    await loadAllSprites();
+    await Promise.all([loadAllSprites(), audio.preloadWavs()]);
   } catch (err) {
-    console.warn("[Émergence] Erreur de chargement des sprites :", err);
+    console.warn("[Émergence] Erreur de chargement des assets :", err);
   }
 
   // Démarre l'écran de menu (le gameplay s'init au clic sur Jouer)
