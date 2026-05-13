@@ -22,3 +22,6 @@ venv/
 
 # Logs
 *.log
+
+# Art direction — dossier de previews locales (validation avant intégration)
+08-art-direction/preview/
