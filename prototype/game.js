@@ -1085,6 +1085,7 @@ function tryPlaceTurret(side, wallSlotIndex) {
   game.units.push(turret);
   slot.turret = turret;
   audio.playSFX("place");
+  if (side === "player") tutorialOnAction("build_turret");
   return true;
 }
 
@@ -1218,6 +1219,7 @@ function tryPlaceFactory(side, slotIndex, typeId) {
     mode: "attack",
   };
   audio.playSFX("place");
+  if (side === "player") tutorialOnAction("build_factory");
   return true;
 }
 
@@ -1238,6 +1240,7 @@ function tryUpgradeFactory(side, slotIndex, statId) {
   slot.factory.upgrades[statId] = lvl + 1;
   slot.factory.totalInvested += cost;
   audio.playSFX("upgrade");
+  if (side === "player") tutorialOnAction("upgrade");
   return true;
 }
 
@@ -1723,34 +1726,91 @@ if (typeof window !== "undefined") {
   window.addEventListener("re-auth-changed", applyTeamSkin);
 }
 
+// IA solo : trois personnalités piochées au démarrage de partie qui biaisent
+// les choix de factories, plus une réaction à la composition adverse (plus
+// de sniper / turret quand le joueur sort de l'air). L'IA pose aussi des
+// turrets sur ses wall slots, plus tôt si l'air est repéré.
+const AI_STRATEGIES = {
+  rush:     { name: "rush",     bias: { swarmer: 2.0, light: 1.5, heavy: 0.6 }, defenseChance: 0.10, turretAffinity: 0.15 },
+  balanced: { name: "balanced", bias: { swarmer: 1.0, light: 1.0, heavy: 1.0, sniper: 1.0, air: 1.0 }, defenseChance: 0.30, turretAffinity: 0.30 },
+  defense:  { name: "defense",  bias: { heavy: 2.0, sniper: 1.6, swarmer: 0.5 }, defenseChance: 0.55, turretAffinity: 0.60 },
+};
+
+function pickAiStrategy() {
+  const keys = Object.keys(AI_STRATEGIES);
+  return AI_STRATEGIES[keys[Math.floor(Math.random() * keys.length)]];
+}
+
 function updateEnemyAI(dt) {
   const state = game.enemy;
+  if (!state.aiStrategy) state.aiStrategy = pickAiStrategy();
   state.buildTimer += dt;
   if (state.buildTimer < AI_CONFIG.buildInterval) return;
 
-  // L'IA ne construit que sur les cellules constructibles (hors path)
+  // 1) Tentative de placement d'une tourelle anti-air si le joueur a
+  //    des drones (>= 2 visibles) et qu'il reste un wall slot libre.
+  const playerAirCount = game.units.filter(
+    (u) => u.side === "player" && u.stats?.layer === "air" && u.hp > 0
+  ).length;
+  const wallSlots = state.wallSlots || [];
+  const freeWall = wallSlots.findIndex((w) => !w.turret);
+  if (freeWall >= 0 && state.money >= TURRET_TYPE.cost) {
+    const baseAffinity = state.aiStrategy.turretAffinity;
+    const urgency = playerAirCount >= 2 ? 0.7 : (playerAirCount >= 1 ? 0.35 : 0);
+    if (Math.random() < Math.min(0.85, baseAffinity + urgency)) {
+      tryPlaceTurret("enemy", freeWall);
+      state.buildTimer = 0;
+      return;
+    }
+  }
+
   const buildable = state.slots.filter((s) => !s.factory && !s.isPath);
   if (buildable.length === 0) {
     state.buildTimer = 0;
     return;
   }
 
-  // Tirage pondéré parmi les types abordables
+  // 2) Choix du type pondéré par la stratégie + réaction au mix adverse
   const affordable = Object.keys(FACTORY_TYPES).filter((t) => state.money >= FACTORY_TYPES[t].cost);
   if (affordable.length === 0) {
     state.buildTimer = AI_CONFIG.buildInterval - 1;
     return;
   }
-  const totalWeight = affordable.reduce((a, t) => a + (AI_CONFIG.typeWeights[t] || 10), 0);
+
+  const playerHeavyCount = game.units.filter((u) => u.side === "player" && u.typeId === "heavy" && u.hp > 0).length;
+  const weightFor = (t) => {
+    let w = (AI_CONFIG.typeWeights[t] || 10) * (state.aiStrategy.bias[t] || 1);
+    // Réactions au mix adverse :
+    if (t === "sniper") {
+      if (playerAirCount >= 3) w *= 4;
+      else if (playerAirCount >= 1) w *= 2;
+    }
+    if (t === "heavy" && playerHeavyCount >= 3) w *= 0.6;
+    return Math.max(0.1, w);
+  };
+
+  const totalWeight = affordable.reduce((a, t) => a + weightFor(t), 0);
   let r = Math.random() * totalWeight;
   let typeId = affordable[0];
   for (const t of affordable) {
-    r -= AI_CONFIG.typeWeights[t] || 10;
+    r -= weightFor(t);
     if (r <= 0) { typeId = t; break; }
   }
 
+  // 3) Sélection du slot. Defense factories → proches du rempart,
+  //    attaque → plus en arrière de la base.
+  const isDefenseFactory = Math.random() < state.aiStrategy.defenseChance;
+  const enemyRampartX = CONFIG.W - CONFIG.BASE_W;
+  const sorted = [...buildable].sort((a, b) => {
+    const aDist = Math.abs(a.x - enemyRampartX);
+    const bDist = Math.abs(b.x - enemyRampartX);
+    return isDefenseFactory ? aDist - bDist : bDist - aDist;
+  });
+  // On prend un slot dans le top 3 pour garder un peu d'aléa
+  const pool = sorted.slice(0, Math.min(3, sorted.length));
+  const slot = pool[Math.floor(Math.random() * pool.length)];
+
   const type = FACTORY_TYPES[typeId];
-  const slot = buildable[Math.floor(Math.random() * buildable.length)];
   state.money -= type.cost;
   game.stats.enemy.moneySpent += type.cost;
   game.stats.enemy.factoriesBuilt++;
@@ -1765,7 +1825,7 @@ function updateEnemyAI(dt) {
     level: 1,
     upgrades: defaultUpgrades(),
     totalInvested: type.cost,
-    mode: Math.random() < game.preset.aiDefenseChance ? "defense" : "attack",
+    mode: isDefenseFactory ? "defense" : "attack",
   };
   state.buildTimer = 0;
 }
@@ -1929,6 +1989,7 @@ function fireLightningAt(targetX, side = "player") {
   game.stats.enemy.unitsKilled += killsByEnemy;
   game.stats[side].lightningsUsed++;
   audio.playSFX("lightning");
+  if (side === "player") tutorialOnAction("lightning");
   return true;
 }
 
@@ -4002,6 +4063,7 @@ function drawMenu(ctx) {
         { label: "🛍️ Boutique", url: "/shop/" },
         { label: "🎯 Missions", url: "/missions/" },
         { label: "🏆 Classement", url: "/leaderboard/" },
+        { label: "👥 Amis",     url: "/friends/" },
         { label: "👤 Profil",   url: "/profile/" },
         ...(profile.is_admin ? [{ label: "⚙️ Admin", url: "/admin/" }] : []),
         { label: "↪ Déconnexion", action: "signout" },
@@ -4135,31 +4197,58 @@ function drawGameOverOverlay(ctx) {
   // Rapport de partie
   drawGameOverReport(ctx);
 
-  // Bouton "Rejouer" (masqué en multijoueur)
+  // Bouton "Rejouer" (solo) ou "Rematch" (MP, sauf spectateur)
   const isMp = game.mode === "mp";
-  const btnW = 180;
+  const isSpec2 = isMp && game.mp?.role === "spectator";
+  const btnW = 200;
   const btnH = 52;
   const gap = 16;
-  const totalW = isMp ? btnW : btnW * 2 + gap;
+  const showAction = !isSpec2; // spectator → seulement Menu
+  const totalW = showAction ? btnW * 2 + gap : btnW;
   const startX = (CONFIG.CANVAS_W - totalW) / 2;
   const btnY = CONFIG.H - 90;
-  if (isMp) {
+  if (!showAction) {
     game.ui.replayBtn = null;
+    game.ui.rematchBtn = null;
     game.ui.gameOverMenuBtn = { x: startX, y: btnY, w: btnW, h: btnH };
   } else {
-    game.ui.replayBtn = { x: startX, y: btnY, w: btnW, h: btnH };
+    if (isMp) {
+      // Rematch
+      const rect = { x: startX, y: btnY, w: btnW, h: btnH };
+      game.ui.rematchBtn = rect;
+      game.ui.replayBtn = null;
+      const r = ensureRematchState() || { myRequested: false, peerRequested: false, pending: false };
+      const hover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+      let label;
+      if (r.pending) label = "⏳ Rematch en cours…";
+      else if (r.myRequested && !r.peerRequested) label = "✓ En attente de l'adversaire…";
+      else if (!r.myRequested && r.peerRequested) label = "🔁 L'adversaire veut rejouer !";
+      else label = "🔁 Rematch";
+      ctx.fillStyle = hover && !r.pending ? COLORS.hpGood : "rgba(34,197,94,0.35)";
+      roundedRect(ctx, rect.x, rect.y, btnW, btnH, 10);
+      ctx.fill();
+      ctx.strokeStyle = COLORS.hpGood;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 16px -apple-system, sans-serif";
+      ctx.fillText(label, rect.x + btnW / 2, btnY + btnH / 2);
+    } else {
+      // Solo : "Rejouer"
+      game.ui.replayBtn = { x: startX, y: btnY, w: btnW, h: btnH };
+      game.ui.rematchBtn = null;
+      const replayHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.replayBtn);
+      ctx.fillStyle = replayHover ? COLORS.player : COLORS.playerDark;
+      roundedRect(ctx, game.ui.replayBtn.x, game.ui.replayBtn.y, btnW, btnH, 10);
+      ctx.fill();
+      ctx.strokeStyle = COLORS.player;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 18px -apple-system, sans-serif";
+      ctx.fillText("↻ Rejouer", game.ui.replayBtn.x + btnW / 2, btnY + btnH / 2);
+    }
     game.ui.gameOverMenuBtn = { x: startX + btnW + gap, y: btnY, w: btnW, h: btnH };
-
-    const replayHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.replayBtn);
-    ctx.fillStyle = replayHover ? COLORS.player : COLORS.playerDark;
-    roundedRect(ctx, game.ui.replayBtn.x, game.ui.replayBtn.y, btnW, btnH, 10);
-    ctx.fill();
-    ctx.strokeStyle = COLORS.player;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 18px -apple-system, sans-serif";
-    ctx.fillText("↻ Rejouer", game.ui.replayBtn.x + btnW / 2, btnY + btnH / 2);
   }
 
   const menuHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.gameOverMenuBtn);
@@ -5220,10 +5309,15 @@ function setupInput(canvas) {
       return;
     }
 
-    // Cas game over : Rejouer ou retour Menu
+    // Cas game over : Rejouer / Rematch / retour Menu
     if (game.gameOver) {
       if (game.ui.replayBtn && pointInRect(sx, sy, game.ui.replayBtn)) {
         startGame(game.difficulty);
+        return;
+      }
+      if (game.ui.rematchBtn && pointInRect(sx, sy, game.ui.rematchBtn)) {
+        audio.playSFX("click");
+        requestRematch();
         return;
       }
       if (game.ui.gameOverMenuBtn && pointInRect(sx, sy, game.ui.gameOverMenuBtn)) {
@@ -5713,6 +5807,10 @@ function resetGame() {
 // 6 étapes simples pour la 1ère partie d'un nouveau joueur. Tu cliques sur
 // "Compris !" pour passer à la suivante (pas de détection d'action automatique
 // pour rester simple). Le panneau reste affiché en haut de l'écran.
+// Chaque étape peut avoir un awaitAction : si le joueur effectue l'action
+// correspondante avant de cliquer "Compris", on passe automatiquement à la
+// suivante. targetBtn (optionnel) référence l'id d'un build button pour
+// dessiner un pulse autour pendant l'étape.
 const TUTORIAL_STEPS = [
   {
     title: "Bienvenue sur Émergence !",
@@ -5721,24 +5819,76 @@ const TUTORIAL_STEPS = [
   {
     title: "Pose ta première usine",
     body: "En haut, choisis une 🏭 Légère (touche 1), puis clique sur un emplacement vide à gauche pour la poser. Les usines coûtent de l'argent, affiché en haut à gauche.",
+    awaitAction: "build_factory",
+    targetBtn: "build-light",
   },
   {
     title: "Améliore tes usines",
     body: "Clique sur une usine que tu as posée pour ouvrir son panneau d'upgrade : dégâts, vitesse, PV, etc. Plus tu améliores, plus tes unités sont fortes.",
+    awaitAction: "upgrade",
   },
   {
     title: "Défends-toi avec des tourelles",
-    body: "Sélectionne 🗼 Turret (touche 6) et clique sur ton rempart pour poser une tourelle qui tire automatiquement sur les ennemis qui approchent.",
+    body: "Sélectionne 🗼 Turret (touche 6) et clique sur ton rempart pour poser une tourelle qui tire automatiquement sur les ennemis (y compris les drones !).",
+    awaitAction: "build_turret",
+    targetBtn: "build-turret",
   },
   {
     title: "Lance l'éclair quand ça chauffe ⚡",
     body: "Le bouton ⚡ Éclair (touche L) te permet de tirer une frappe verticale qui tue toutes les unités sur une bande. Cooldown de 30s.",
+    awaitAction: "lightning",
+    targetBtn: "lightning",
+  },
+  {
+    title: "💥 IEM : balayage total",
+    body: "Le bouton 💥 IEM coûte 400 💰 et tue TOUTES les unités mobiles des deux camps. Réservé aux moments où tu te fais déborder.",
+    targetBtn: "iem",
   },
   {
     title: "Bonne chance !",
     body: "Pour gagner, fais tomber la base ennemie à 0 PV. Pour gagner de la monnaie et débloquer des skins/missions, connecte-toi via le menu. Ferme ce tutoriel et joue !",
   },
 ];
+
+// Appelée par tryPlaceFactory / tryUpgradeFactory / tryPlaceTurret /
+// fireLightningAt quand l'action réussit côté joueur. Si l'étape courante
+// attend cette action, on l'avance.
+function tutorialOnAction(actionType) {
+  if (!game.tutorial?.active) return;
+  const step = TUTORIAL_STEPS[game.tutorial.step];
+  if (!step || !step.awaitAction) return;
+  if (step.awaitAction === actionType) {
+    if (game.tutorial.step < TUTORIAL_STEPS.length - 1) {
+      game.tutorial.step++;
+    } else {
+      game.tutorial.active = false;
+    }
+  }
+}
+
+// Dessine un pulse cyan/vert autour d'un bouton du HUD pour guider le clic.
+// btnId : "build-light" / "build-turret" / "lightning" / "iem".
+function drawTutorialPulse(ctx, btnId) {
+  let rect = null;
+  if (btnId === "lightning") rect = game.ui.lightningBtn;
+  else if (btnId === "iem") rect = game.ui.iemBtn;
+  else {
+    const b = (game.ui.buttons || []).find((bb) => bb.id === btnId);
+    if (b) rect = b;
+  }
+  if (!rect) return;
+  const t = (performance.now() % 1100) / 1100;
+  const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 2);
+  ctx.save();
+  ctx.strokeStyle = `rgba(34, 197, 94, ${(0.7 + 0.3 * pulse).toFixed(3)})`;
+  ctx.lineWidth = 3 + 2 * pulse;
+  ctx.shadowColor = "#22c55e";
+  ctx.shadowBlur = 12 + 8 * pulse;
+  const grow = 4 + 4 * pulse;
+  roundedRect(ctx, rect.x - grow, rect.y - grow, rect.w + grow * 2, rect.h + grow * 2, 8);
+  ctx.stroke();
+  ctx.restore();
+}
 
 function startTutorial() {
   if (game.mp && window.RE_MP) { try { window.RE_MP.leave(); } catch {} }
@@ -5756,24 +5906,35 @@ function startTutorial() {
   audio.startMusic();
 }
 
-// Tutoriel — modal centré qui pause visuellement la partie : un voile sombre
-// est appliqué sur tout l'écran, puis la carte d'explication apparaît au
-// milieu. Aucun élément de jeu ne peut le chevaucher puisque c'est dessiné
-// en dernier dans render() et que le voile recouvre déjà tout le reste.
+// Tutoriel — deux modes :
+//   - Étapes purement informatives (welcome, end) : modal centré avec voile
+//     sombre pour bloquer l'attention.
+//   - Étapes avec awaitAction : bannière haut-centre plus discrète + pulse
+//     autour du bouton cible, pour que le joueur PUISSE effectuer l'action.
 function drawTutorialOverlay(ctx) {
   if (!game.tutorial?.active) { game.ui.tutorialRects = null; return; }
   const step = TUTORIAL_STEPS[game.tutorial.step];
   if (!step) { game.tutorial.active = false; return; }
 
-  // Voile assombrissant (rend la carte centrale totalement lisible)
+  const interactive = !!step.awaitAction;
+
+  // Pulse autour du bouton cible (si défini)
+  if (step.targetBtn) drawTutorialPulse(ctx, step.targetBtn);
+
+  // Voile : opaque pour les étapes "lecture", très léger pour les étapes
+  // interactives où l'utilisateur doit pouvoir voir et cliquer.
   ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.62)";
+  ctx.fillStyle = interactive ? "rgba(0, 0, 0, 0.18)" : "rgba(0, 0, 0, 0.62)";
   ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
   ctx.restore();
 
-  const W = 540, H = 280;
+  const W = interactive ? 600 : 540;
+  const H = interactive ? 170 : 280;
   const x = (CONFIG.CANVAS_W - W) / 2;
-  const y = (CONFIG.H - H) / 2;
+  // En interactif on remonte le panneau pour libérer le bas (zone de jeu).
+  const y = interactive
+    ? CONFIG.H - H - 24
+    : (CONFIG.H - H) / 2;
 
   ctx.save();
   ctx.fillStyle = "rgba(15,23,42,0.94)";
@@ -5933,6 +6094,7 @@ function startMultiplayer() {
     window.RE_MP.onStart(handleMpStart);
     window.RE_MP.onChat(handleMpChat);
     window.RE_MP.onEmote(handleMpEmote);
+    window.RE_MP.onRematch(handleMpRematch);
     window.RE_MP.onPeerInfo(({ skin, username, from }) => {
       if (skin) applyPeerSkin(skin);
       // Met aussi à jour le username affiché en MP (host/guest)
@@ -6009,6 +6171,139 @@ function handleMpEmote(payload) {
     ts: performance.now(),
   });
   if (game.ui.emoteEvents.length > 8) game.ui.emoteEvents.shift();
+}
+
+// ── Rematch ───────────────────────────────────────────────────────────────
+// Le rematch utilise le canal courant pour s'accorder, puis l'host appelle
+// createLobby et broadcast le nouveau code au guest. Chacun rejoint le
+// nouveau lobby + se marque ready automatiquement.
+function ensureRematchState() {
+  if (!game.mp) return null;
+  if (!game.mp.rematch) {
+    game.mp.rematch = { myRequested: false, peerRequested: false, newLobbyCode: null, pending: false };
+  }
+  return game.mp.rematch;
+}
+
+async function requestRematch() {
+  if (!window.RE_MP || game.mode !== "mp" || !game.mp) return;
+  const r = ensureRematchState();
+  if (r.pending) return;
+  r.myRequested = true;
+  window.RE_MP.sendRematch("request");
+  // Si le peer avait déjà demandé, on file directement à l'étape suivante
+  if (r.peerRequested) await proceedRematch();
+}
+
+async function handleMpRematch(payload) {
+  if (!payload || !game.mp) return;
+  const r = ensureRematchState();
+  if (payload.from === game.mp.role) return; // ignore mes propres echoes (au cas où)
+  if (payload.action === "request") {
+    r.peerRequested = true;
+    if (r.myRequested) await proceedRematch();
+  } else if (payload.action === "cancel") {
+    r.peerRequested = false;
+  } else if (payload.action === "start") {
+    // Le host nous communique le code du nouveau lobby — on le rejoint
+    r.pending = true;
+    await rejoinAsGuest(payload.code);
+  }
+}
+
+async function proceedRematch() {
+  const r = ensureRematchState();
+  if (r.pending) return;
+  r.pending = true;
+  if (game.mp.role === "host") {
+    // Crée un nouveau lobby et envoie le code à l'adversaire
+    const res = await window.RE_MP.createLobby({
+      biome: game.biome,
+      difficulty: game.difficulty,
+      visibility: game.mp.visibility === "private" ? "private" : "public",
+    });
+    if (res?.error) {
+      flashLobbyMessage("Erreur rematch : " + res.error, "error");
+      r.pending = false;
+      r.myRequested = false;
+      return;
+    }
+    // Sur le NOUVEAU lobby, je suis host. Envoie le code via l'ANCIEN
+    // canal (qui est encore vivant) avant de remplacer.
+    if (window.RE_MP.state.channel) {
+      // setupChannel() de createLobby a déjà remplacé state.channel par le nouveau.
+      // L'ancien est fermé — on ne peut plus broadcast dessus. À la place, on
+      // s'appuie sur le fait qu'on a envoyé "start" AVANT createLobby ? Non,
+      // on n'avait pas le code. Solution simple : le guest a aussi écouté
+      // postgres_changes / poll DB pour un nouveau lobby créé par son host
+      // mais c'est lourd. Plus simple : on rouvre le canal ancien
+      // temporairement via un broadcast sur le NOUVEAU canal (le guest n'y
+      // est pas encore) → impossible.
+    }
+    // Approche retenue : on broadcast l'event "start" sur le NOUVEAU lobby
+    // ne marche pas (guest pas connecté). On utilise un poll DB côté guest :
+    // après avoir cliqué rematch, le guest interroge les lobbies actifs du
+    // host. Voir guestWaitForRematch ci-dessous.
+    // Pour le host : on transitionne directement vers le room screen.
+    game.mp.lobbyId = window.RE_MP.state.lobbyId;
+    game.mp.code = window.RE_MP.state.code;
+    game.mp.status = "waiting";
+    game.mp.hostReady = false;
+    game.mp.guestReady = false;
+    game.mp.opponent = null; // sera repeuplé quand le guest rejoint
+    game.tutorial = null;
+    game.screen = "lobby";
+    game.ui.lobbyPage = "room";
+    game.ui.lobbyMessage = "En attente du rematch de l'adversaire…";
+    // Auto-ready côté host (on a déjà accepté en cliquant Rematch)
+    setTimeout(() => { if (game.mp?.lobbyId) window.RE_MP.setReady(true); }, 300);
+  } else {
+    // Guest : poll le re_list_active_lobbies pour trouver le nouveau lobby
+    // de l'host (avec son host_id), puis joinByCode dessus
+    rejoinLookupHostLobby();
+  }
+}
+
+async function rejoinLookupHostLobby() {
+  const hostId = game.mp?.opponent?.id;
+  const tries = 30; // ~30 * 1s = 30s timeout
+  for (let i = 0; i < tries; i++) {
+    if (!game.mp?.rematch?.pending) return;
+    try {
+      const res = await window.RE_MP.listActiveLobbies();
+      const fresh = (res?.lobbies || []).find((l) =>
+        l.host_id === hostId && l.status === "waiting" && (!game.mp?.lobbyId || l.lobby_id !== game.mp.lobbyId)
+      );
+      if (fresh) {
+        await rejoinAsGuest(fresh.code);
+        return;
+      }
+    } catch {}
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  flashLobbyMessage("Le rematch a expiré — retour au menu.", "error");
+  setTimeout(() => goToMenu(), 2000);
+}
+
+async function rejoinAsGuest(code) {
+  if (!code) return;
+  const res = await window.RE_MP.joinByCode(code);
+  if (res?.error) {
+    flashLobbyMessage("Rematch impossible : " + res.error, "error");
+    return;
+  }
+  game.mp.role = "guest";
+  game.mp.lobbyId = res.lobbyId;
+  game.mp.code = res.code;
+  game.mp.status = res.status || "waiting";
+  game.mp.hostReady = false;
+  game.mp.guestReady = false;
+  game.mp.opponent = { id: null, username: res.host_username };
+  game.tutorial = null;
+  game.screen = "lobby";
+  game.ui.lobbyPage = "room";
+  game.ui.lobbyMessage = "";
+  setTimeout(() => { if (game.mp?.lobbyId) window.RE_MP.setReady(true); }, 300);
 }
 
 function handleMpChat(payload) {
@@ -7216,6 +7511,45 @@ async function boot() {
   // Démarre l'écran de menu (le gameplay s'init au clic sur Jouer)
   game.screen = "menu";
   requestAnimationFrame(gameLoop);
+
+  // ?invite=CODE → auto-flow vers le rejoindre MP avec le code prérempli
+  try {
+    const params = new URLSearchParams(location.search);
+    const inviteCode = params.get("invite");
+    if (inviteCode && /^[A-Z0-9]{4,8}$/i.test(inviteCode)) {
+      // Nettoie l'URL pour que le refresh n'auto-rejoigne pas en boucle
+      history.replaceState(null, "", location.pathname);
+      // Démarre la séquence MP → join screen → préfill code
+      setTimeout(() => {
+        if (!window.RE_AUTH?.profile) {
+          location.href = `/auth/login.html?next=${encodeURIComponent("/prototype/?invite=" + inviteCode)}`;
+          return;
+        }
+        startMultiplayer();
+        game.ui.lobbyPage = "join";
+        game.ui.codeInput = inviteCode.toUpperCase();
+        // Auto-submit après un court délai
+        setTimeout(() => { if (game.screen === "lobby" && game.ui.lobbyPage === "join") mpJoinByCode(game.ui.codeInput); }, 600);
+      }, 400);
+    }
+  } catch (err) { console.warn("[invite URL]", err); }
+
+  // Ping de présence pour qu'on apparaisse en ligne dans la liste d'amis
+  schedulePresencePing();
+}
+
+// Met à jour last_seen_at toutes les 60 s tant que la page est ouverte.
+async function schedulePresencePing() {
+  const ping = async () => {
+    if (window.RE_AUTH?.session) {
+      try {
+        const { supabase } = await import("/lib/supabase.js");
+        await supabase.rpc("re_touch_presence");
+      } catch {}
+    }
+  };
+  await ping();
+  setInterval(ping, 60_000);
 }
 
 document.addEventListener("DOMContentLoaded", boot);

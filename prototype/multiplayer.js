@@ -28,6 +28,7 @@ const listeners = {
   chat: new Set(),             // message texte reçu via broadcast
   emote: new Set(),            // emote rapide reçue via broadcast
   peerInfo: new Set(),         // identité du peer (username + skin) reçue à la connexion
+  rematch: new Set(),          // request / cancel / start de rematch
 };
 
 const state = {
@@ -240,6 +241,7 @@ async function setupChannel() {
   ch.on("broadcast", { event: "gameover" }, ({ payload }) => notify("gameOver", payload));
   ch.on("broadcast", { event: "chat" },     ({ payload }) => notify("chat", payload));
   ch.on("broadcast", { event: "emote" },    ({ payload }) => notify("emote", payload));
+  ch.on("broadcast", { event: "rematch" },  ({ payload }) => notify("rematch", payload));
   ch.on("broadcast", { event: "hello" },    ({ payload }) => {
     // ping de présence : à la réception, on notifie game.js qui pourra appliquer
     // le skin du peer à son côté. Le host répond toujours au hello du guest pour
@@ -455,6 +457,19 @@ async function joinAsSpectator(lobbyId, opts = {}) {
   };
 }
 
+// Rematch — émet un event sur le canal courant. payload.action :
+//   "request" : "je veux rejouer"
+//   "cancel"  : "j'annule ma demande"
+//   "start"   : "voici le nouveau lobby code à rejoindre" (envoyé par le host)
+function sendRematch(action, extras = {}) {
+  if (!state.channel) return;
+  state.channel.send({
+    type: "broadcast",
+    event: "rematch",
+    payload: { action, from: state.role, ...extras },
+  });
+}
+
 function sendEmote(emoteId) {
   if (!state.channel || !emoteId) return;
   const payload = {
@@ -484,6 +499,7 @@ const RE_MP = {
   sendGameOver,
   sendChat,
   sendEmote,
+  sendRematch,
   reportFinish,
   onInput:         (cb) => on("input", cb),
   onSnapshot:      (cb) => on("snapshot", cb),
@@ -494,6 +510,7 @@ const RE_MP = {
   onChat:          (cb) => on("chat", cb),
   onEmote:         (cb) => on("emote", cb),
   onPeerInfo:      (cb) => on("peerInfo", cb),
+  onRematch:       (cb) => on("rematch", cb),
 };
 
 window.RE_MP = RE_MP;

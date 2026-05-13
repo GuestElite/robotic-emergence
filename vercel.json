@@ -18,7 +18,7 @@
       ]
     },
     {
-      "source": "/(auth|shop|missions|leaderboard|profile|admin)/(.*)",
+      "source": "/(auth|shop|missions|leaderboard|friends|profile|admin)/(.*)",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
       ]
