@@ -339,6 +339,14 @@ const SFX_WAV_VOLUMES = {
   "lightning":     0.65,
 };
 
+// Tracks de menu disponibles dans le dropdown top-left.
+// Tous CC-BY 4.0 par Scott Buckley — crédités dans 11-sound-design/README.md.
+const MENU_MUSIC_TRACKS = [
+  { id: "ride-the-wind", label: "Ride The Wind",    file: "bgm-menu.mp3",             mood: "Aventure épique" },
+  { id: "bring-sky",     label: "Bring Me The Sky", file: "bgm-menu-bring-sky.mp3",   mood: "Inspirant doux" },
+  { id: "decoherence",   label: "Decoherence",      file: "bgm-menu-decoherence.mp3", mood: "Sci-fi ambient" },
+];
+
 const audio = {
   ctx: null,
   musicEnabled: true,
@@ -351,6 +359,7 @@ const audio = {
   bgmVolume: 0.22,     // référence interne (mixée avec musicVolume)
   menuMusic: null,
   menuMusicVolume: 0.30,  // un peu plus haute que la BGM in-game car écran statique
+  menuMusicTrackId: "ride-the-wind",  // track actuelle (auto-restore depuis localStorage)
   ambientAudio: null,
   ambientVolume: 0.16, // sous la BGM, juste assez pour donner vie au biome
   wavBuffers: {},
@@ -511,27 +520,46 @@ const audio = {
       try { this.bgmAudio.pause(); this.bgmAudio.currentTime = 0; } catch (_) {}
     }
   },
-  // ── Menu music (Ride The Wind, joué UNIQUEMENT sur l'écran menu)
-  // Séparé de la BGM in-game pour pouvoir basculer proprement entre les 2
-  // sans jamais les superposer.
+  // ── Menu music — joué UNIQUEMENT sur l'écran menu, indépendant du BGM in-game.
+  // 3 tracks au choix dans le dropdown du menu (top-left). Le user peut switcher
+  // à la volée ; le choix est persisté en localStorage.
   preloadMenuMusic() {
-    // Crée l'Audio element très tôt (au boot) avec preload="auto" pour que
-    // le téléchargement (10 MB) se fasse en arrière-plan. Au premier clic
-    // utilisateur, play() sera instantané puisque le buffer sera déjà rempli.
     if (this.menuMusic) return;
-    this.menuMusic = new Audio("../11-sound-design/music/bgm-menu.mp3");
+    const track = MENU_MUSIC_TRACKS.find((t) => t.id === this.menuMusicTrackId)
+                  || MENU_MUSIC_TRACKS[0];
+    this.menuMusic = new Audio(`../11-sound-design/music/${track.file}`);
     this.menuMusic.loop = true;
     this.menuMusic.preload = "auto";
     this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
+    this.menuMusic._trackId = track.id;
     try { this.menuMusic.load(); } catch (_) {}
   },
   startMenuMusic() {
     if (!this.musicEnabled) return;
     if (this.menuMusic && !this.menuMusic.paused) return;
-    // Si pas encore préchargée, on la crée ici (fallback)
     if (!this.menuMusic) this.preloadMenuMusic();
     this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
     this.menuMusic.play().catch(() => { /* autoplay bloqué — réessaie au prochain clic */ });
+  },
+  setMenuTrack(trackId) {
+    const track = MENU_MUSIC_TRACKS.find((t) => t.id === trackId);
+    if (!track) return;
+    // Si même track et déjà en cours, ne fais rien
+    if (this.menuMusic && this.menuMusic._trackId === trackId && !this.menuMusic.paused) return;
+    this.menuMusicTrackId = trackId;
+    // Détruit l'ancien audio (pause + reset) et crée le nouveau
+    if (this.menuMusic) {
+      try { this.menuMusic.pause(); } catch (_) {}
+      this.menuMusic = null;
+    }
+    this.menuMusic = new Audio(`../11-sound-design/music/${track.file}`);
+    this.menuMusic.loop = true;
+    this.menuMusic.preload = "auto";
+    this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
+    this.menuMusic._trackId = trackId;
+    if (this.musicEnabled && game.screen === "menu") {
+      this.menuMusic.play().catch(() => {});
+    }
   },
   stopMenuMusic() {
     if (this.menuMusic) {
@@ -603,6 +631,9 @@ function loadSettings() {
     if (typeof s.sfxEnabled === "boolean") audio.sfxEnabled = s.sfxEnabled;
     if (typeof s.musicVolume === "number") audio.musicVolume = Math.max(0, Math.min(1, s.musicVolume));
     if (typeof s.sfxVolume === "number") audio.sfxVolume = Math.max(0, Math.min(1, s.sfxVolume));
+    if (s.menuMusicTrackId && MENU_MUSIC_TRACKS.some((t) => t.id === s.menuMusicTrackId)) {
+      audio.menuMusicTrackId = s.menuMusicTrackId;
+    }
   } catch (_) {}
 }
 
@@ -615,6 +646,7 @@ function saveSettings() {
       sfxEnabled: audio.sfxEnabled,
       musicVolume: audio.musicVolume,
       sfxVolume: audio.sfxVolume,
+      menuMusicTrackId: audio.menuMusicTrackId,
     }));
   } catch (_) {}
 }
@@ -5665,9 +5697,95 @@ function drawGlassAccent(ctx, x, y, w, h, color, opts = {}) {
   ctx.restore();
 }
 
+// Dropdown menu music — chip top-left, click = expand, click option = switch.
+function drawMenuMusicSelector(ctx) {
+  if (!game.ui.menuMusicRects) game.ui.menuMusicRects = {};
+  const X = 16, Y = 14;
+  const CHIP_W = 200, CHIP_H = 32;
+  const expanded = !!game.ui.menuMusicExpanded;
+  const currentTrack = MENU_MUSIC_TRACKS.find((t) => t.id === audio.menuMusicTrackId)
+                       || MENU_MUSIC_TRACKS[0];
+
+  ctx.save();
+
+  // ── CHIP
+  const chipRect = { x: X, y: Y, w: CHIP_W, h: CHIP_H };
+  game.ui.menuMusicRects.chip = chipRect;
+  const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, chipRect);
+  // Background glass
+  ctx.fillStyle = isHover ? "rgba(91, 140, 255, 0.25)" : "rgba(255, 255, 255, 0.10)";
+  roundedRect(ctx, X, Y, CHIP_W, CHIP_H, 8);
+  ctx.fill();
+  ctx.strokeStyle = isHover ? "rgba(91, 140, 255, 0.7)" : "rgba(255, 255, 255, 0.20)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Icône musique 🎵 + nom track + chevron
+  ctx.fillStyle = "#fff";
+  ctx.font = "13px -apple-system, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`🎵 ${currentTrack.label}`, X + 12, Y + CHIP_H / 2);
+  // Chevron (▼ ou ▲)
+  ctx.fillStyle = "rgba(255, 255, 255, 0.65)";
+  ctx.font = "10px -apple-system, sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillText(expanded ? "▲" : "▼", X + CHIP_W - 12, Y + CHIP_H / 2);
+
+  // ── Options expanded
+  game.ui.menuMusicRects.options = [];
+  if (expanded) {
+    const optY0 = Y + CHIP_H + 4;
+    const OPT_H = 36;
+    // Background panneau
+    ctx.fillStyle = "rgba(15, 23, 42, 0.90)";
+    roundedRect(ctx, X, optY0, CHIP_W, MENU_MUSIC_TRACKS.length * OPT_H + 4, 8);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    for (let i = 0; i < MENU_MUSIC_TRACKS.length; i++) {
+      const t = MENU_MUSIC_TRACKS[i];
+      const rect = { x: X + 2, y: optY0 + 2 + i * OPT_H, w: CHIP_W - 4, h: OPT_H, id: t.id };
+      game.ui.menuMusicRects.options.push(rect);
+      const opHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+      const isActive = t.id === audio.menuMusicTrackId;
+      // Highlight
+      if (opHover || isActive) {
+        ctx.fillStyle = isActive ? "rgba(91, 140, 255, 0.25)" : "rgba(255, 255, 255, 0.08)";
+        roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 5);
+        ctx.fill();
+      }
+      // Track label
+      ctx.fillStyle = isActive ? "#9bc1ff" : "#fff";
+      ctx.font = isActive ? "bold 13px -apple-system, sans-serif" : "13px -apple-system, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText(t.label, rect.x + 10, rect.y + 16);
+      // Mood
+      ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+      ctx.font = "10px -apple-system, sans-serif";
+      ctx.fillText(t.mood, rect.x + 10, rect.y + 29);
+      // Check si actif
+      if (isActive) {
+        ctx.fillStyle = "#9bc1ff";
+        ctx.font = "11px -apple-system, sans-serif";
+        ctx.textAlign = "right";
+        ctx.fillText("✓", rect.x + rect.w - 10, rect.y + 22);
+      }
+    }
+  }
+
+  ctx.restore();
+}
+
 function drawMenu(ctx) {
   drawGlassBackground(ctx);
   const cx = CONFIG.CANVAS_W / 2;
+
+  // ── Dropdown sélecteur de menu music (top-left, uniquement menu)
+  drawMenuMusicSelector(ctx);
 
   // Titre — gradient blanc/bleu façon visionOS
   ctx.save();
@@ -9739,13 +9857,17 @@ async function boot() {
     console.warn("[Émergence] Erreur de chargement des assets :", err);
   }
 
-  // Précharge la menu music (10 MB) en arrière-plan dès le boot.
-  // Au premier clic utilisateur, play() sera instantané (buffer déjà rempli).
+  // Précharge la menu music (le user peut la changer via le dropdown menu).
   audio.preloadMenuMusic();
 
   // Démarre l'écran de menu (le gameplay s'init au clic sur Jouer)
   game.screen = "menu";
   requestAnimationFrame(gameLoop);
+
+  // Tentative d'autoplay : la plupart des navigateurs bloqueront si c'est
+  // la 1ère visite du site (politique autoplay). Le catch() est silencieux,
+  // dans ce cas la musique démarrera au 1er clic utilisateur (cf. handler clic).
+  setTimeout(() => audio.startMenuMusic(), 100);
 
   // Fallback simulation hors-RAF quand la page est cachée (autre onglet,
   // fenêtre minimisée). Sans ça, le host MP fige et bloque le guest.

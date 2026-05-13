@@ -1156,6 +1156,213 @@ def render_effect_laser() -> Image.Image:
 
 
 # ===========================================================================
+# 10. MEDIC — unité K9 quadrupède animée (4 frames) + factory hôpital
+# ===========================================================================
+# Convention spécifique au médic :
+# - L'unité est dessinée en vue 3/4 (camera légèrement au-dessus + de côté),
+#   contrairement au reste du roster qui est pure top-down. C'est un choix
+#   design assumé : le médic doit casser le moule pour être instantanément
+#   identifiable comme support.
+# - 4 frames de course en trot diagonal (F0 + F2 = appuis, F1 + F3 = suspension).
+# - Le code de game.js cycle les frames quand l'unité bouge (~10 fps).
+
+_MED = {
+    "cross":      ( 34, 197,  94, 255),
+    "cross_dark": ( 21, 128,  61, 255),
+    "cross_glow": (134, 239, 172, 255),
+    "white":      (243, 244, 246, 255),
+    "white_dark": (209, 213, 219, 255),
+}
+
+# Décalages d'animation (4 frames de trot diagonal)
+_MEDIC_BODY_Y_BOB = [0, -2, 0, -2]            # corps soulevé en suspension
+_MEDIC_LEG_X_PHASE = {
+    "front_near": [+3,  0, -3, 0],
+    "back_near":  [-3,  0, +3, 0],
+    "front_far":  [-3,  0, +3, 0],
+    "back_far":   [+3,  0, -3, 0],
+}
+_MEDIC_LEG_Y_LIFT = [0, -3, 0, -3]
+
+
+def _medic_render_leg(d, base_x, base_y, x_off, y_off, is_far=False):
+    """Patte en 2 segments + paw, plus sombre/petite si arrière-plan."""
+    upper = METAL["darkest"] if not is_far else (40, 50, 65, 255)
+    lower = METAL["dark"] if not is_far else (40, 50, 65, 255)
+    paw_col = METAL["base"] if not is_far else METAL["dark"]
+    leg_w = 2 if not is_far else 1
+    d.line((base_x, base_y, base_x + x_off, base_y + 4 + y_off),
+           fill=upper, width=leg_w + 1)
+    d.line((base_x + x_off, base_y + 4 + y_off, base_x + x_off, base_y + 8 + y_off),
+           fill=lower, width=leg_w)
+    pr = 1 if is_far else 2
+    d.ellipse((base_x + x_off - pr, base_y + 8 + y_off - pr // 2,
+               base_x + x_off + pr, base_y + 8 + y_off + pr),
+              fill=paw_col, outline=ACCENT["outline"] if not is_far else None)
+
+
+def render_unit_medic(side: str, frame: int = 0, pal_override: dict = None) -> Image.Image:
+    """Médic K9 quadrupède en vue 3/4. `frame` ∈ [0, 3] pour le cycle de course."""
+    frame = max(0, min(3, int(frame)))
+    W = H = 48
+    pal = pal_override if pal_override is not None else side_palette(side, 0)
+    img, d = new_canvas(W, H)
+    cx, cy = W // 2, H // 2
+    body_y_off = _MEDIC_BODY_Y_BOB[frame]
+
+    # Ombre au sol (ne suit pas le bob)
+    shadow = Image.new("RGBA", (W, H), TRANSPARENT)
+    sd = ImageDraw.Draw(shadow, "RGBA")
+    sd.ellipse((cx - 14, cy + 11, cx + 12, cy + 17),
+               fill=(0, 0, 0, 90 if body_y_off == 0 else 70))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(2))
+    img = Image.alpha_composite(img, shadow)
+    d = ImageDraw.Draw(img, "RGBA")
+
+    # Pattes lointaines (derrière le corps, plus sombres)
+    far_y = cy - 2 + body_y_off
+    _medic_render_leg(d, cx + 6, far_y, _MEDIC_LEG_X_PHASE["front_far"][frame],
+                      _MEDIC_LEG_Y_LIFT[frame], is_far=True)
+    _medic_render_leg(d, cx - 8, far_y, _MEDIC_LEG_X_PHASE["back_far"][frame],
+                      _MEDIC_LEG_Y_LIFT[frame], is_far=True)
+
+    # Corps en 3/4 : flanc (dark) sous le dos (base)
+    body_top, body_bottom = cy - 4 + body_y_off, cy + 6 + body_y_off
+    body_left, body_right = cx - 12, cx + 10
+    d.rounded_rectangle((body_left + 2, body_top + 4, body_right - 2, body_bottom),
+                        radius=3, fill=pal["dark"], outline=ACCENT["outline"])
+    d.rounded_rectangle((body_left, body_top, body_right - 2, body_top + 7),
+                        radius=3, fill=pal["base"], outline=ACCENT["outline"])
+    d.line((body_left + 1, body_top + 7, body_right - 3, body_top + 7),
+           fill=pal["light"], width=1)
+    d.line((body_left + 2, body_top + 1, body_right - 6, body_top + 1),
+           fill=pal["light"], width=1)
+
+    # Module médical (panneau blanc + croix verte) sur le dos
+    panel_x0, panel_x1 = cx - 6, cx + 4
+    panel_y0, panel_y1 = body_top + 1, body_top + 7
+    d.rounded_rectangle((panel_x0, panel_y0, panel_x1, panel_y1), radius=1,
+                        fill=_MED["white"], outline=ACCENT["outline"])
+    mid_x = (panel_x0 + panel_x1) // 2
+    mid_y = (panel_y0 + panel_y1) // 2
+    d.rectangle((panel_x0 + 1, mid_y, panel_x1 - 1, mid_y + 1), fill=_MED["cross"])
+    d.rectangle((mid_x, panel_y0 + 1, mid_x + 1, panel_y1 - 1), fill=_MED["cross"])
+
+    # Pattes proches (devant, plus grosses)
+    near_y = cy + 3 + body_y_off
+    _medic_render_leg(d, cx + 6, near_y, _MEDIC_LEG_X_PHASE["front_near"][frame],
+                      _MEDIC_LEG_Y_LIFT[frame], is_far=False)
+    _medic_render_leg(d, cx - 8, near_y, _MEDIC_LEG_X_PHASE["back_near"][frame],
+                      _MEDIC_LEG_Y_LIFT[frame], is_far=False)
+
+    # Tête à l'avant droit (3/4, regard +X) + museau + LED scanner + oreilles
+    head_x0, head_x1 = cx + 9, cx + 17
+    head_y0, head_y1 = cy - 5 + body_y_off, cy + 4 + body_y_off
+    d.rounded_rectangle((head_x0, head_y0, head_x1, head_y1), radius=3,
+                        fill=pal["base"], outline=ACCENT["outline"])
+    d.rectangle((head_x1, head_y0 + 3, head_x1 + 2, head_y1 - 2),
+                fill=pal["dark"], outline=ACCENT["outline"])
+    d.rectangle((head_x0 + 4, head_y0 + 2, head_x1 - 1, head_y0 + 5),
+                fill=METAL["darkest"])
+    d.rectangle((head_x0 + 4, head_y0 + 3, head_x1 - 2, head_y0 + 4),
+                fill=_MED["cross_glow"])
+    d.point((head_x1 - 3, head_y0 + 3), fill=ACCENT["white"])
+    d.polygon([(head_x0 + 1, head_y0), (head_x0 + 3, head_y0 - 3),
+               (head_x0 + 4, head_y0 + 1)], fill=pal["dark"],
+              outline=ACCENT["outline"])
+    d.polygon([(head_x1 - 4, head_y0), (head_x1 - 2, head_y0 - 3),
+               (head_x1 - 1, head_y0 + 1)], fill=pal["dark"],
+              outline=ACCENT["outline"])
+
+    # Antenne arrière + LED verte (remplace la queue)
+    tail_x, tail_y = body_left - 2, body_top + 2
+    d.line((tail_x + 2, tail_y, tail_x - 2, tail_y - 3),
+           fill=METAL["darkest"], width=1)
+    d.ellipse((tail_x - 3, tail_y - 4, tail_x - 1, tail_y - 2),
+              fill=_MED["cross_glow"])
+
+    # Halo de soin diffus
+    halo = Image.new("RGBA", (W, H), TRANSPARENT)
+    hd = ImageDraw.Draw(halo, "RGBA")
+    hd.ellipse((cx - 20, cy - 4, cx + 20, cy + 18),
+               outline=(*_MED["cross_glow"][:3], 70), width=2)
+    halo = halo.filter(ImageFilter.GaussianBlur(2))
+    img = Image.alpha_composite(halo, img)
+    return img
+
+
+def render_factory_medic(side: str, pal_override: dict = None) -> Image.Image:
+    """Factory médic : hôpital de campagne avec grosse croix verte centrale."""
+    W = H = 128
+    pal = pal_override if pal_override is not None else side_palette(side)
+    img, d = new_canvas(W, H)
+    d.rounded_rectangle((6, 8, W - 6, H - 6), radius=10,
+                        fill=METAL["darkest"], outline=ACCENT["outline"], width=1)
+
+    sub_img, sd = new_canvas(W, H)
+    body = (12, 14, W - 12, H - 12)
+    rounded_rect_with_shading(sd, body,
+                              color_base=_MED["white"], color_dark=_MED["white_dark"],
+                              color_light=ACCENT["white"], radius=8,
+                              outline=ACCENT["outline"])
+    sd.rounded_rectangle(body, radius=8, outline=pal["base"], width=2)
+    rivets(sd, body, METAL["darkest"], spacing=20)
+
+    band_top = (16, 18, W - 16, 30)
+    sd.rounded_rectangle(band_top, radius=4,
+                         fill=pal["dark"], outline=ACCENT["outline"])
+    for cx_t in range(28, W - 28, 14):
+        sd.rectangle((cx_t - 1, 22, cx_t + 1, 26), fill=_MED["cross_glow"])
+        sd.rectangle((cx_t - 2, 23, cx_t + 2, 25), fill=_MED["cross_glow"])
+
+    cross_box = (W // 2 - 22, H // 2 - 22, W // 2 + 22, H // 2 + 22)
+    sd.rounded_rectangle(cross_box, radius=4,
+                         fill=_MED["white"], outline=ACCENT["outline"], width=2)
+    cx_c, cy_c = W // 2, H // 2
+    sd.rectangle((cx_c - 18, cy_c - 5, cx_c + 18, cy_c + 5), fill=_MED["cross"])
+    sd.rectangle((cx_c - 5, cy_c - 18, cx_c + 5, cy_c + 18), fill=_MED["cross"])
+    sd.line((cx_c - 18, cy_c + 5, cx_c + 18, cy_c + 5),
+            fill=_MED["cross_dark"], width=1)
+    sd.line((cx_c + 5, cy_c - 18, cx_c + 5, cy_c + 18),
+            fill=_MED["cross_dark"], width=1)
+    sd.line((cx_c - 18, cy_c - 5, cx_c + 18, cy_c - 5),
+            fill=_MED["cross_glow"], width=1)
+
+    for cx_d, cy_d in [(28, 44), (W - 28, 44), (28, H - 44), (W - 28, H - 44)]:
+        sd.ellipse((cx_d - 8, cy_d - 8, cx_d + 8, cy_d + 8),
+                   fill=_MED["white"], outline=ACCENT["outline"])
+        sd.rectangle((cx_d - 4, cy_d - 1, cx_d + 4, cy_d + 1), fill=_MED["cross"])
+        sd.rectangle((cx_d - 1, cy_d - 4, cx_d + 1, cy_d + 4), fill=_MED["cross"])
+
+    aura = Image.new("RGBA", (W, H), TRANSPARENT)
+    ad = ImageDraw.Draw(aura, "RGBA")
+    ad.ellipse((W // 2 - 56, H // 2 - 56, W // 2 + 56, H // 2 + 56),
+               outline=(*_MED["cross_glow"][:3], 110), width=3)
+    ad.ellipse((W // 2 - 50, H // 2 - 50, W // 2 + 50, H // 2 + 50),
+               outline=(*_MED["cross_glow"][:3], 70), width=2)
+    aura = aura.filter(ImageFilter.GaussianBlur(3))
+
+    antenna(sd, 24, 18, 10, _MED["cross_glow"])
+    antenna(sd, W - 24, 18, 10, _MED["cross_glow"])
+
+    for cx_l, cy_l in [(20, 24), (W - 20, 24), (20, H - 24), (W - 20, H - 24)]:
+        sd.ellipse((cx_l - 2, cy_l - 2, cx_l + 2, cy_l + 2),
+                   fill=_MED["cross_glow"], outline=ACCENT["outline"])
+
+    gate_w = 24
+    sd.rectangle((W // 2 - gate_w // 2, H - 14, W // 2 + gate_w // 2, H - 6),
+                 fill=METAL["darkest"], outline=ACCENT["outline"])
+    sd.rectangle((W // 2 - gate_w // 2 + 3, H - 12, W // 2 + gate_w // 2 - 3, H - 8),
+                 fill=_MED["cross_glow"])
+
+    if side == "enemy":
+        sub_img = sub_img.transpose(Image.FLIP_TOP_BOTTOM)
+    img = Image.alpha_composite(img, aura)
+    img = Image.alpha_composite(img, sub_img)
+    return drop_shadow(img, offset=(2, 3), blur=4, opacity=110)
+
+
+# ===========================================================================
 # MAIN
 # ===========================================================================
 
@@ -1198,6 +1405,17 @@ SPRITES = [
     ("unit-sniper-enemy-t2.png",   render_unit_sniper,  ("enemy", 2)),
     ("unit-air-enemy-t1.png",      render_unit_air,     ("enemy", 1)),
     ("unit-air-enemy-t2.png",      render_unit_air,     ("enemy", 2)),
+    # === Médic : factory + 4 frames d'animation par camp ===
+    ("factory-medic-player.png", render_factory_medic,  ("player",)),
+    ("factory-medic-enemy.png",  render_factory_medic,  ("enemy",)),
+    ("unit-medic-player-0.png",  render_unit_medic,     ("player", 0)),
+    ("unit-medic-player-1.png",  render_unit_medic,     ("player", 1)),
+    ("unit-medic-player-2.png",  render_unit_medic,     ("player", 2)),
+    ("unit-medic-player-3.png",  render_unit_medic,     ("player", 3)),
+    ("unit-medic-enemy-0.png",   render_unit_medic,     ("enemy", 0)),
+    ("unit-medic-enemy-1.png",   render_unit_medic,     ("enemy", 1)),
+    ("unit-medic-enemy-2.png",   render_unit_medic,     ("enemy", 2)),
+    ("unit-medic-enemy-3.png",   render_unit_medic,     ("enemy", 3)),
     ("tile-wall.png",            render_tile_wall,      ()),
     ("effect-explosion.png",     render_effect_explosion, ()),
     ("effect-laser.png",         render_effect_laser,   ()),
