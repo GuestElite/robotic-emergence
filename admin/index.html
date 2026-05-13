@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin — Robotic Emergence</title>
+  <link rel="stylesheet" href="/lib/theme.css" />
+  <style>
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+    .tab { padding: 10px 18px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text-muted); font-weight: 600; font-size: 14px; }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .panel { display: none; } .panel.active { display: block; }
+    .actions { display: flex; gap: 6px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .form-grid .full { grid-column: 1 / -1; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav">
+      <a href="/prototype/">🎮 Jouer</a>
+      <a href="/shop/">🛍️ Boutique</a>
+      <a href="/missions/">🎯 Missions</a>
+      <a href="/profile/">👤 Profil</a>
+      <span class="spacer"></span>
+      <a href="/admin/" class="active">⚙️ Admin</a>
+      <span class="currency-pill" id="currencyPill">— 💰</span>
+      <button class="btn-secondary" id="signoutBtn" style="padding: 6px 12px; font-size: 12px;">Déconnexion</button>
+    </div>
+
+    <h1>⚙️ Dashboard administrateur</h1>
+    <p class="muted">Crée et modifie les missions, items de boutique et règles de récompense.</p>
+
+    <div id="msg"></div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="missions">🎯 Missions</div>
+      <div class="tab" data-tab="shop">🛍️ Boutique</div>
+      <div class="tab" data-tab="rules">💰 Règles de currency</div>
+      <div class="tab" data-tab="users">👥 Joueurs</div>
+    </div>
+
+    <!-- MISSIONS -->
+    <div class="panel active" id="panel-missions">
+      <h2>Créer une mission</h2>
+      <div class="card card-wide" style="margin-bottom: 20px">
+        <form id="missionForm" class="form-grid">
+          <div><label>Titre</label><input id="m-title" required maxlength="100" /></div>
+          <div><label>Type d'objectif</label>
+            <select id="m-type" required>
+              <option value="wins_total">Victoires totales</option>
+              <option value="wins_difficulty">Victoires (difficulté spécifique)</option>
+              <option value="kills_total">Total de kills</option>
+              <option value="lightning_used">Éclairs utilisés</option>
+              <option value="turrets_placed">Turrets placées</option>
+              <option value="survive_seconds">Secondes survécues (cumul)</option>
+              <option value="damage_dealt">Dégâts infligés (cumul)</option>
+              <option value="factories_built">Factories construites</option>
+              <option value="upgrades_bought">Upgrades achetés</option>
+              <option value="games_played">Parties jouées</option>
+            </select>
+          </div>
+          <div><label>Valeur cible</label><input id="m-value" type="number" min="1" required /></div>
+          <div><label>Difficulté (si applicable)</label>
+            <select id="m-diff"><option value="">— Aucune —</option><option value="easy">Facile</option><option value="normal">Normal</option><option value="hard">Difficile</option></select>
+          </div>
+          <div><label>Récompense (💰)</label><input id="m-reward" type="number" min="0" required /></div>
+          <div><label>Tri (sort_order)</label><input id="m-sort" type="number" value="100" /></div>
+          <div class="full"><label>Description</label><textarea id="m-desc" rows="2"></textarea></div>
+          <div><label><input id="m-rep" type="checkbox" /> Répétable</label></div>
+          <div><label><input id="m-active" type="checkbox" checked /> Active</label></div>
+          <div class="full"><button type="submit">➕ Créer la mission</button></div>
+        </form>
+      </div>
+      <h2>Missions existantes</h2>
+      <table class="table" id="missionsTable"></table>
+    </div>
+
+    <!-- SHOP -->
+    <div class="panel" id="panel-shop">
+      <h2>Créer un skin (couleur d'équipe)</h2>
+      <div class="card card-wide" style="margin-bottom: 20px">
+        <form id="shopForm" class="form-grid">
+          <div><label>Nom</label><input id="s-name" required maxlength="50" /></div>
+          <div><label>Rareté</label>
+            <select id="s-rarity">
+              <option value="common">Common</option>
+              <option value="rare">Rare</option>
+              <option value="epic">Epic</option>
+              <option value="legendary">Legendary</option>
+            </select>
+          </div>
+          <div><label>Couleur principale (hex)</label><input id="s-hex" type="color" /></div>
+          <div><label>Couleur foncée (hex)</label><input id="s-hex-dark" type="color" /></div>
+          <div><label>Prix (💰)</label><input id="s-price" type="number" min="0" required /></div>
+          <div><label>Tri</label><input id="s-sort" type="number" value="100" /></div>
+          <div><label><input id="s-active" type="checkbox" checked /> Active</label></div>
+          <div class="full"><button type="submit">➕ Créer le skin</button></div>
+        </form>
+      </div>
+      <h2>Skins existants</h2>
+      <table class="table" id="shopTable"></table>
+    </div>
+
+    <!-- RULES -->
+    <div class="panel" id="panel-rules">
+      <h2>Règles de currency</h2>
+      <p class="muted small">Montants gagnés à la fin d'une partie selon résultat × difficulté.</p>
+      <table class="table" id="rulesTable"></table>
+    </div>
+
+    <!-- USERS -->
+    <div class="panel" id="panel-users">
+      <h2>Joueurs</h2>
+      <p class="muted small">Liste des comptes inscrits (max 100 derniers). Toggle admin / reset currency.</p>
+      <table class="table" id="usersTable"></table>
+    </div>
+  </div>
+
+  <script type="module">
+    import { supabase, getProfile, requireSession } from "/lib/supabase.js";
+
+    await requireSession("/auth/login.html?next=" + encodeURIComponent(location.pathname));
+    const profile = await getProfile();
+    if (!profile.is_admin) {
+      document.body.innerHTML = `<div class="center-page"><div class="card"><h1>⛔ Accès refusé</h1><p class="muted">Ce dashboard est réservé aux administrateurs.</p><a class="btn btn-block" href="/prototype/">Retour au jeu</a></div></div>`;
+      throw new Error("not admin");
+    }
+    document.getElementById("currencyPill").textContent = `${profile.currency} 💰`;
+    document.getElementById("signoutBtn").addEventListener("click", async () => {
+      await supabase.auth.signOut(); location.href = "/auth/login.html";
+    });
+
+    const msg = document.getElementById("msg");
+    function flash(text, type = "success") {
+      msg.innerHTML = `<div class="msg msg-${type}">${text}</div>`;
+      setTimeout(() => { if (msg.firstChild) msg.firstChild.remove(); }, 4000);
+    }
+
+    // Tabs
+    document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
+      t.classList.add("active");
+      document.getElementById("panel-" + t.dataset.tab).classList.add("active");
+    }));
+
+    // ─── MISSIONS ──────────────────────────────────────────────────
+    async function loadMissions() {
+      const { data } = await supabase.from("re_missions").select("*").order("sort_order");
+      document.getElementById("missionsTable").innerHTML = `
+        <thead><tr><th>Titre</th><th>Type</th><th>Objectif</th><th>Reward</th><th>État</th><th></th></tr></thead>
+        <tbody>${(data || []).map(m => `
+          <tr>
+            <td><strong>${m.title}</strong><div class="muted small">${m.description || ""}</div></td>
+            <td>${m.objective_type}${m.difficulty_filter ? ` (${m.difficulty_filter})` : ""}</td>
+            <td>${m.objective_value}</td>
+            <td>+${m.reward}</td>
+            <td>${m.is_active ? "✓" : "⏸️"}${m.is_repeatable ? " 🔁" : ""}</td>
+            <td class="actions">
+              <button class="btn-secondary" data-toggle-mission="${m.id}" data-active="${m.is_active}" style="padding: 6px 10px; font-size: 12px;">${m.is_active ? "Désactiver" : "Activer"}</button>
+              <button class="btn-danger" data-del-mission="${m.id}" style="padding: 6px 10px; font-size: 12px;">🗑️</button>
+            </td>
+          </tr>
+        `).join("")}</tbody>
+      `;
+    }
+    await loadMissions();
+
+    document.getElementById("missionForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = {
+        title: document.getElementById("m-title").value.trim(),
+        description: document.getElementById("m-desc").value.trim() || null,
+        objective_type: document.getElementById("m-type").value,
+        objective_value: parseInt(document.getElementById("m-value").value),
+        difficulty_filter: document.getElementById("m-diff").value || null,
+        reward: parseInt(document.getElementById("m-reward").value),
+        sort_order: parseInt(document.getElementById("m-sort").value || 100),
+        is_repeatable: document.getElementById("m-rep").checked,
+        is_active: document.getElementById("m-active").checked,
+      };
+      const { error } = await supabase.from("re_missions").insert(body);
+      if (error) return flash(error.message, "error");
+      flash("Mission créée ✓");
+      e.target.reset();
+      await loadMissions();
+    });
+
+    document.getElementById("missionsTable").addEventListener("click", async (e) => {
+      const tog = e.target.dataset.toggleMission;
+      const del = e.target.dataset.delMission;
+      if (tog) {
+        const isActive = e.target.dataset.active === "true";
+        await supabase.from("re_missions").update({ is_active: !isActive }).eq("id", tog);
+        await loadMissions();
+      }
+      if (del && confirm("Supprimer cette mission ?")) {
+        await supabase.from("re_missions").delete().eq("id", del);
+        await loadMissions();
+      }
+    });
+
+    // ─── SHOP ──────────────────────────────────────────────────────
+    async function loadShop() {
+      const { data } = await supabase.from("re_shop_items").select("*").order("sort_order");
+      document.getElementById("shopTable").innerHTML = `
+        <thead><tr><th>Aperçu</th><th>Nom</th><th>Rareté</th><th>Prix</th><th>État</th><th></th></tr></thead>
+        <tbody>${(data || []).map(s => `
+          <tr>
+            <td><div style="width: 32px; height: 32px; border-radius: 6px; background: ${s.hex_color}"></div></td>
+            <td><strong>${s.name}</strong></td>
+            <td><span class="badge badge-${s.rarity}">${s.rarity}</span></td>
+            <td>${s.price} 💰</td>
+            <td>${s.is_active ? "✓" : "⏸️"}</td>
+            <td class="actions">
+              <button class="btn-secondary" data-toggle-shop="${s.id}" data-active="${s.is_active}" style="padding: 6px 10px; font-size: 12px;">${s.is_active ? "Désactiver" : "Activer"}</button>
+              <button class="btn-danger" data-del-shop="${s.id}" style="padding: 6px 10px; font-size: 12px;">🗑️</button>
+            </td>
+          </tr>
+        `).join("")}</tbody>
+      `;
+    }
+    await loadShop();
+
+    document.getElementById("shopForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = {
+        type: "team_color",
+        name: document.getElementById("s-name").value.trim(),
+        rarity: document.getElementById("s-rarity").value,
+        hex_color: document.getElementById("s-hex").value,
+        hex_color_dark: document.getElementById("s-hex-dark").value,
+        price: parseInt(document.getElementById("s-price").value),
+        sort_order: parseInt(document.getElementById("s-sort").value || 100),
+        is_active: document.getElementById("s-active").checked,
+      };
+      const { error } = await supabase.from("re_shop_items").insert(body);
+      if (error) return flash(error.message, "error");
+      flash("Skin créé ✓");
+      e.target.reset();
+      await loadShop();
+    });
+
+    document.getElementById("shopTable").addEventListener("click", async (e) => {
+      const tog = e.target.dataset.toggleShop;
+      const del = e.target.dataset.delShop;
+      if (tog) {
+        const isActive = e.target.dataset.active === "true";
+        await supabase.from("re_shop_items").update({ is_active: !isActive }).eq("id", tog);
+        await loadShop();
+      }
+      if (del && confirm("Supprimer ce skin ?")) {
+        await supabase.from("re_shop_items").delete().eq("id", del);
+        await loadShop();
+      }
+    });
+
+    // ─── RULES ─────────────────────────────────────────────────────
+    async function loadRules() {
+      const { data } = await supabase.from("re_currency_rules").select("*").order("rule_key");
+      document.getElementById("rulesTable").innerHTML = `
+        <thead><tr><th>Clé</th><th>Description</th><th>Montant</th><th></th></tr></thead>
+        <tbody>${(data || []).map(r => `
+          <tr>
+            <td><code>${r.rule_key}</code></td>
+            <td>${r.description || ""}</td>
+            <td><input type="number" value="${r.amount}" data-rule-key="${r.rule_key}" style="width: 80px" /></td>
+            <td><button data-save-rule="${r.rule_key}" style="padding: 6px 12px; font-size: 12px;">Sauver</button></td>
+          </tr>
+        `).join("")}</tbody>
+      `;
+    }
+    await loadRules();
+    document.getElementById("rulesTable").addEventListener("click", async (e) => {
+      const key = e.target.dataset.saveRule;
+      if (!key) return;
+      const input = document.querySelector(`input[data-rule-key="${key}"]`);
+      const value = parseInt(input.value);
+      const { error } = await supabase.from("re_currency_rules").update({ amount: value, updated_at: new Date().toISOString() }).eq("rule_key", key);
+      if (error) return flash(error.message, "error");
+      flash(`Règle "${key}" mise à jour ✓`);
+    });
+
+    // ─── USERS ─────────────────────────────────────────────────────
+    async function loadUsers() {
+      const { data } = await supabase.from("re_profiles").select("*").order("created_at", { ascending: false }).limit(100);
+      document.getElementById("usersTable").innerHTML = `
+        <thead><tr><th>Username</th><th>Créé</th><th>Currency</th><th>Admin</th><th></th></tr></thead>
+        <tbody>${(data || []).map(u => `
+          <tr>
+            <td><strong>${u.username || "(sans nom)"}</strong><div class="muted small">${u.id.slice(0, 8)}…</div></td>
+            <td class="muted small">${new Date(u.created_at).toLocaleDateString("fr-FR")}</td>
+            <td><input type="number" value="${u.currency}" data-user-currency="${u.id}" style="width: 90px" /></td>
+            <td>${u.is_admin ? "⭐" : "—"}</td>
+            <td class="actions">
+              <button data-save-user="${u.id}" style="padding: 6px 12px; font-size: 12px;">Sauver</button>
+              <button class="btn-secondary" data-toggle-admin="${u.id}" data-admin="${u.is_admin}" style="padding: 6px 12px; font-size: 12px;">${u.is_admin ? "Retirer admin" : "Faire admin"}</button>
+            </td>
+          </tr>
+        `).join("")}</tbody>
+      `;
+    }
+    await loadUsers();
+    document.getElementById("usersTable").addEventListener("click", async (e) => {
+      const sav = e.target.dataset.saveUser;
+      const tog = e.target.dataset.toggleAdmin;
+      if (sav) {
+        const v = parseInt(document.querySelector(`input[data-user-currency="${sav}"]`).value);
+        const { error } = await supabase.from("re_profiles").update({ currency: v }).eq("id", sav);
+        if (error) return flash(error.message, "error");
+        flash("Currency mise à jour ✓");
+      }
+      if (tog) {
+        const isAdmin = e.target.dataset.admin === "true";
+        await supabase.from("re_profiles").update({ is_admin: !isAdmin }).eq("id", tog);
+        await loadUsers();
+      }
+    });
+  </script>
+</body>
+</html>

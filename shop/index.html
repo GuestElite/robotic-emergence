@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Boutique — Robotic Emergence</title>
+  <link rel="stylesheet" href="/lib/theme.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav">
+      <a href="/prototype/">🎮 Jouer</a>
+      <a href="/shop/" class="active">🛍️ Boutique</a>
+      <a href="/missions/">🎯 Missions</a>
+      <a href="/profile/">👤 Profil</a>
+      <span class="spacer"></span>
+      <span id="adminLink"></span>
+      <span class="currency-pill" id="currencyPill">— 💰</span>
+      <button class="btn-secondary" id="signoutBtn" style="padding: 6px 12px; font-size: 12px;">Déconnexion</button>
+    </div>
+
+    <h1>🛍️ Boutique — couleurs d'équipe</h1>
+    <p class="muted">Achète une couleur puis clique sur « Équiper » pour la voir appliquée à ta team en jeu.</p>
+
+    <div id="msg"></div>
+
+    <div class="grid-cards" id="shopGrid"></div>
+  </div>
+
+  <script type="module">
+    import { supabase, getProfile, requireSession } from "/lib/supabase.js";
+
+    await requireSession("/auth/login.html?next=" + encodeURIComponent(location.pathname));
+    const profile = await getProfile();
+    document.getElementById("currencyPill").textContent = `${profile.currency} 💰`;
+    if (profile.is_admin) {
+      document.getElementById("adminLink").innerHTML = `<a href="/admin/" style="padding:6px 12px; font-size:12px;">⚙️ Admin</a>`;
+    }
+
+    document.getElementById("signoutBtn").addEventListener("click", async () => {
+      await supabase.auth.signOut();
+      location.href = "/auth/login.html";
+    });
+
+    const { data: items } = await supabase
+      .from("re_shop_items")
+      .select("*")
+      .eq("is_active", true)
+      .order("sort_order");
+
+    const { data: inventory } = await supabase
+      .from("re_user_inventory")
+      .select("item_id")
+      .eq("user_id", profile.id);
+    const ownedIds = new Set((inventory || []).map(i => i.item_id));
+
+    const grid = document.getElementById("shopGrid");
+    const msg = document.getElementById("msg");
+
+    function render() {
+      grid.innerHTML = "";
+      for (const item of items) {
+        const owned = ownedIds.has(item.id);
+        const active = profile.current_skin_id === item.id;
+        const canAfford = profile.currency >= item.price;
+        const card = document.createElement("div");
+        card.className = `skin-card ${owned ? "owned" : ""} ${active ? "active" : ""} ${!owned && !canAfford ? "locked" : ""}`;
+        card.style.setProperty("--dark-color", item.hex_color_dark || "#000");
+        card.innerHTML = `
+          <div class="skin-swatch" style="background: ${item.hex_color}"></div>
+          <div class="row-between" style="margin-bottom:6px">
+            <span style="font-weight:700">${item.name}</span>
+            <span class="badge badge-${item.rarity}">${item.rarity}</span>
+          </div>
+          <div class="muted small" style="margin-bottom:10px">
+            ${owned ? (active ? "✓ Équipée" : "Possédée") : `${item.price} 💰`}
+          </div>
+          ${owned
+            ? (active
+                ? `<button class="btn-secondary btn-block" disabled>Équipée</button>`
+                : `<button class="btn-success btn-block" data-equip="${item.id}">Équiper</button>`)
+            : `<button class="btn-block" data-buy="${item.id}" ${canAfford ? "" : "disabled"}>${canAfford ? "Acheter" : "Pas assez 💰"}</button>`
+          }
+        `;
+        grid.appendChild(card);
+      }
+    }
+    render();
+
+    grid.addEventListener("click", async (e) => {
+      const buyId = e.target.dataset.buy;
+      const equipId = e.target.dataset.equip;
+      if (buyId) {
+        e.target.disabled = true; e.target.textContent = "...";
+        const { data, error } = await supabase.rpc("re_buy_item", { p_item_id: buyId });
+        if (error || !data?.ok) {
+          msg.innerHTML = `<div class="msg msg-error">${error?.message || data?.error || "Échec"}</div>`;
+          render();
+          return;
+        }
+        const item = items.find(i => i.id === buyId);
+        profile.currency -= item.price;
+        ownedIds.add(buyId);
+        document.getElementById("currencyPill").textContent = `${profile.currency} 💰`;
+        msg.innerHTML = `<div class="msg msg-success">✓ "${item.name}" acheté !</div>`;
+        render();
+      } else if (equipId) {
+        await supabase.from("re_profiles").update({ current_skin_id: equipId, updated_at: new Date().toISOString() }).eq("id", profile.id);
+        profile.current_skin_id = equipId;
+        const item = items.find(i => i.id === equipId);
+        msg.innerHTML = `<div class="msg msg-success">✓ "${item.name}" équipée. La couleur s'applique au prochain lancement de partie.</div>`;
+        render();
+      }
+    });
+  </script>
+</body>
+</html>

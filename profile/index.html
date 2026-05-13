@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Profil — Robotic Emergence</title>
+  <link rel="stylesheet" href="/lib/theme.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav">
+      <a href="/prototype/">🎮 Jouer</a>
+      <a href="/shop/">🛍️ Boutique</a>
+      <a href="/missions/">🎯 Missions</a>
+      <a href="/profile/" class="active">👤 Profil</a>
+      <span class="spacer"></span>
+      <span id="adminLink"></span>
+      <span class="currency-pill" id="currencyPill">— 💰</span>
+      <button class="btn-secondary" id="signoutBtn" style="padding: 6px 12px; font-size: 12px;">Déconnexion</button>
+    </div>
+
+    <h1>👤 <span id="usernameH">…</span></h1>
+    <p class="muted" id="emailLine"></p>
+
+    <div class="card card-wide">
+      <h2>Statistiques globales</h2>
+      <table class="table" id="statsTable"></table>
+    </div>
+
+    <div class="card card-wide" style="margin-top: 20px">
+      <h2>Historique des parties (20 dernières)</h2>
+      <table class="table">
+        <thead>
+          <tr><th>Date</th><th>Difficulté</th><th>Résultat</th><th>Durée</th><th>K/D</th><th>Gain</th></tr>
+        </thead>
+        <tbody id="historyBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script type="module">
+    import { supabase, getProfile, requireSession } from "/lib/supabase.js";
+
+    const session = await requireSession("/auth/login.html?next=" + encodeURIComponent(location.pathname));
+    const profile = await getProfile();
+    document.getElementById("currencyPill").textContent = `${profile.currency} 💰`;
+    document.getElementById("usernameH").textContent = profile.username || "Joueur";
+    document.getElementById("emailLine").textContent = session.user.email;
+    if (profile.is_admin) {
+      document.getElementById("adminLink").innerHTML = `<a href="/admin/" style="padding:6px 12px; font-size:12px;">⚙️ Admin</a>`;
+    }
+    document.getElementById("signoutBtn").addEventListener("click", async () => {
+      await supabase.auth.signOut();
+      location.href = "/auth/login.html";
+    });
+
+    const { data: results } = await supabase
+      .from("re_game_results")
+      .select("*")
+      .eq("user_id", profile.id)
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    // Stats agrégées
+    const all = results || [];
+    const wins = all.filter(r => r.result === "win").length;
+    const losses = all.filter(r => r.result === "lose").length;
+    const totalKills = all.reduce((a, r) => a + r.units_killed, 0);
+    const totalDeaths = all.reduce((a, r) => a + r.units_lost, 0);
+    const totalCurrency = all.reduce((a, r) => a + r.currency_earned, 0);
+
+    document.getElementById("statsTable").innerHTML = `
+      <tr><td>Solde actuel</td><td style="color: var(--warn); font-weight: 700;">${profile.currency} 💰</td></tr>
+      <tr><td>Parties jouées</td><td>${all.length}</td></tr>
+      <tr><td>Victoires / Défaites</td><td>${wins} / ${losses} (ratio ${all.length ? ((wins/all.length)*100).toFixed(0) : 0}%)</td></tr>
+      <tr><td>Total kills</td><td>${totalKills}</td></tr>
+      <tr><td>Total morts</td><td>${totalDeaths}</td></tr>
+      <tr><td>Currency gagnée (récent)</td><td>${totalCurrency} 💰</td></tr>
+    `;
+
+    const fmtDate = (s) => new Date(s).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const fmtDur = (s) => `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+    document.getElementById("historyBody").innerHTML = all.map(r => `
+      <tr>
+        <td>${fmtDate(r.created_at)}</td>
+        <td>${r.difficulty}</td>
+        <td style="color: ${r.result === 'win' ? 'var(--success)' : 'var(--danger)'}">${r.result === 'win' ? '🏆 Victoire' : '💀 Défaite'}</td>
+        <td>${fmtDur(r.duration)}</td>
+        <td>${r.units_killed} / ${r.units_lost}</td>
+        <td style="color: var(--warn)">+${r.currency_earned}</td>
+      </tr>
+    `).join("") || `<tr><td colspan="6" class="muted">Aucune partie pour le moment.</td></tr>`;
+  </script>
+</body>
+</html>

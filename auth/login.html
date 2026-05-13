@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Connexion — Robotic Emergence</title>
+  <link rel="stylesheet" href="/lib/theme.css" />
+</head>
+<body>
+  <div class="center-page">
+    <form class="card" id="loginForm">
+      <p class="brand">🤖 ÉMERGENCE</p>
+      <p class="brand-sub">Connexion</p>
+
+      <div id="msg"></div>
+
+      <label for="email">Email</label>
+      <input type="email" id="email" required autocomplete="email" />
+
+      <label for="password">Mot de passe</label>
+      <input type="password" id="password" required autocomplete="current-password" />
+
+      <div style="height: 18px"></div>
+
+      <button class="btn-block" id="submitBtn" type="submit">Se connecter</button>
+
+      <p class="small muted" style="text-align:center; margin-top: 16px">
+        Pas encore de compte ? <a href="/auth/signup.html">Créer un compte</a><br>
+        <a href="/prototype/">← Retour au jeu (mode invité)</a>
+      </p>
+    </form>
+  </div>
+
+  <script type="module">
+    import { supabase } from "/lib/supabase.js";
+
+    const form = document.getElementById("loginForm");
+    const msg = document.getElementById("msg");
+    const btn = document.getElementById("submitBtn");
+
+    // Redirect si déjà connecté
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      const redirect = new URLSearchParams(location.search).get("next") || "/prototype/";
+      location.href = redirect;
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      msg.innerHTML = "";
+      btn.disabled = true; btn.textContent = "Connexion…";
+      const email = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        msg.innerHTML = `<div class="msg msg-error">${error.message}</div>`;
+        btn.disabled = false; btn.textContent = "Se connecter";
+        return;
+      }
+      const redirect = new URLSearchParams(location.search).get("next") || "/prototype/";
+      location.href = redirect;
+    });
+  </script>
+</body>
+</html>

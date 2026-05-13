@@ -24,6 +24,10 @@ const CONFIG = {
   GATE_H: 100,
 };
 
+// Couleurs joueur par défaut (overridées par le skin Supabase via applyTeamSkin())
+const DEFAULT_PLAYER_COLOR = "#3b82f6";
+const DEFAULT_PLAYER_DARK = "#1e40af";
+
 const COLORS = {
   background: "#1a2030",
   ground: "#a88b6b",
@@ -31,8 +35,8 @@ const COLORS = {
   hudBg: "rgba(15, 20, 25, 0.92)",
   hudText: "#e8eef5",
   hudMuted: "rgba(232, 238, 245, 0.55)",
-  player: "#3b82f6",
-  playerDark: "#1e40af",
+  player: DEFAULT_PLAYER_COLOR,
+  playerDark: DEFAULT_PLAYER_DARK,
   playerSoft: "rgba(59, 130, 246, 0.15)",
   enemy: "#ef4444",
   enemyDark: "#991b1b",
@@ -1266,11 +1270,66 @@ function checkGameOver() {
     game.gameOver = { winner: "enemy" };
     audio.playSFX("lose");
     audio.stopMusic();
+    sendGameResultToBackend("lose");
   } else if (game.enemy.baseHP <= 0) {
     game.gameOver = { winner: "player" };
     audio.playSFX("win");
     audio.stopMusic();
+    sendGameResultToBackend("win");
   }
+}
+
+// Pousse les stats de partie vers Supabase (via auth-bridge.js).
+// Met à jour le solde local du joueur et la progression des missions.
+async function sendGameResultToBackend(result) {
+  if (!window.RE_AUTH || !window.RE_AUTH.session) return;
+  const ps = game.stats.player;
+  const payload = {
+    difficulty:    game.difficulty,
+    result,
+    duration:      game.time,
+    unitsKilled:   ps.unitsKilled,
+    unitsLost:     ps.unitsLost,
+    damageDealt:   ps.damageDealt,
+    damageTaken:   ps.damageTaken,
+    turretsBuilt:  ps.turretsBuilt,
+    lightningUsed: ps.lightningsUsed,
+  };
+  try {
+    const res = await window.RE_AUTH.finishGame(payload);
+    if (res?.ok) {
+      game.gameOver.reward = res.reward;
+    }
+  } catch (e) {
+    console.warn("[RE] finishGame failed:", e);
+  }
+}
+
+// Applique le skin équipé aux couleurs du joueur (et la souffle au prochain frame)
+function applyTeamSkin() {
+  const skin = window.RE_AUTH?.skin;
+  if (skin && skin.hex_color && skin.hex_color_dark) {
+    COLORS.player = skin.hex_color;
+    COLORS.playerDark = skin.hex_color_dark;
+    COLORS.playerSoft = hexToRgba(skin.hex_color, 0.15);
+  } else {
+    COLORS.player = DEFAULT_PLAYER_COLOR;
+    COLORS.playerDark = DEFAULT_PLAYER_DARK;
+    COLORS.playerSoft = "rgba(59, 130, 246, 0.15)";
+  }
+}
+
+function hexToRgba(hex, alpha) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// Quand la session ou le skin change (login/logout/équiper), on rafraîchit
+if (typeof window !== "undefined") {
+  window.addEventListener("re-auth-changed", applyTeamSkin);
 }
 
 function updateEnemyAI(dt) {
@@ -3003,13 +3062,67 @@ function drawMenu(ctx) {
   ctx.fillStyle = COLORS.hudMuted;
   ctx.font = "11px -apple-system, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("Souris bord G/D pour scroller — ← → / A D — H / E pour recadrer — Échap pour annuler — 1-4 sélection factory", cx, 620);
+  ctx.fillText("Souris bord G/D pour scroller — ← → / A D — H / E pour recadrer — Échap pour annuler — 1-5 sélection bâtiment", cx, 600);
+
+  // ── BANDEAU AUTH / PROFIL (cliquable HTML hors canvas idéalement, ici on dessine et on intercepte les clics)
+  const profile = window.RE_AUTH?.profile;
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "13px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  if (profile) {
+    ctx.fillText(`👤 ${profile.username || "joueur"}  ·  💰 ${profile.currency} global  ·  équipe : ${window.RE_AUTH?.skin?.name || "bleu défaut"}`, cx, 632);
+  } else {
+    ctx.fillStyle = COLORS.hudMuted;
+    ctx.fillText("Tu joues en invité — connecte-toi pour gagner de la monnaie et débloquer des skins.", cx, 632);
+  }
+
+  // Liens cliquables
+  const linkY = 660;
+  const linksData = profile
+    ? [
+        { label: "🛍️ Boutique", url: "/shop/" },
+        { label: "🎯 Missions", url: "/missions/" },
+        { label: "👤 Profil",   url: "/profile/" },
+        ...(profile.is_admin ? [{ label: "⚙️ Admin", url: "/admin/" }] : []),
+        { label: "↪ Déconnexion", action: "signout" },
+      ]
+    : [
+        { label: "🔐 Se connecter", url: "/auth/login.html" },
+        { label: "🆕 Créer un compte", url: "/auth/signup.html" },
+      ];
+  const linkRects = [];
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  // Mesure et place
+  const padX = 14;
+  const linkH = 28;
+  let totalW = 0;
+  for (const l of linksData) totalW += ctx.measureText(l.label).width + padX * 2 + 8;
+  let lx = cx - totalW / 2;
+  for (const l of linksData) {
+    const w = ctx.measureText(l.label).width + padX * 2;
+    const rect = { x: lx, y: linkY - linkH / 2, w, h: linkH, ...l };
+    const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+    ctx.fillStyle = isHover ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.08)";
+    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 6);
+    ctx.fill();
+    ctx.strokeStyle = isHover ? COLORS.player : "rgba(255,255,255,0.15)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(l.label, lx + w / 2, linkY);
+    linkRects.push(rect);
+    lx += w + 8;
+  }
 
   ctx.fillStyle = COLORS.hudMuted;
   ctx.font = "10px -apple-system, sans-serif";
-  ctx.fillText("github.com/GuestElite/robotic-emergence", cx, CONFIG.H - 16);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("github.com/GuestElite/robotic-emergence", cx, CONFIG.H - 12);
 
-  game.ui.menuRects = { diff: diffRects, play: playRect, music: musicRect, sfx: sfxRect };
+  game.ui.menuRects = { diff: diffRects, play: playRect, music: musicRect, sfx: sfxRect, links: linkRects };
 }
 
 function drawToggleButton(ctx, rect, label, on) {
@@ -3058,9 +3171,15 @@ function drawGameOverOverlay(ctx) {
 
   const win = game.gameOver.winner === "player";
   const title = win ? "VICTOIRE !" : "DÉFAITE";
-  const subtitle = win
+  let subtitle = win
     ? "La base ennemie est tombée."
     : "Ta base a été détruite.";
+  // Récompense Supabase si dispo
+  if (game.gameOver.reward != null) {
+    subtitle += `  · +${game.gameOver.reward} 💰 ajoutés à ton solde`;
+  } else if (!window.RE_AUTH?.session) {
+    subtitle += "  · (invité — aucune monnaie attribuée)";
+  }
 
   ctx.fillStyle = win ? COLORS.hpGood : COLORS.enemy;
   ctx.font = "bold 52px -apple-system, sans-serif";
@@ -3207,7 +3326,18 @@ function drawHUD(ctx) {
   ctx.font = "bold 20px -apple-system, sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  ctx.fillText(`💰 ${game.player.money}`, 20, CONFIG.HUD_H / 2);
+  // Solde de partie (in-game money pour construire)
+  ctx.fillText(`💰 ${game.player.money}`, 20, CONFIG.HUD_H / 2 - 8);
+
+  // Solde global (currency Supabase) + username sous le solde de partie
+  const profile = window.RE_AUTH?.profile;
+  ctx.font = "10px -apple-system, sans-serif";
+  ctx.fillStyle = COLORS.hudMuted;
+  if (profile) {
+    ctx.fillText(`👤 ${profile.username || "joueur"} · 💰 ${profile.currency} global`, 20, CONFIG.HUD_H / 2 + 10);
+  } else {
+    ctx.fillText("invité — connecte-toi pour gagner", 20, CONFIG.HUD_H / 2 + 10);
+  }
 
   // Boutons "Construire" (mode build) + bouton spécial éclair
   drawBuildButtons(ctx);
@@ -3643,6 +3773,20 @@ function setupInput(canvas) {
         saveSettings();
         return;
       }
+      // Liens du bandeau auth (shop / missions / profil / admin / login / signup / signout)
+      if (mr.links) {
+        for (const link of mr.links) {
+          if (pointInRect(sx, sy, link)) {
+            audio.playSFX("click");
+            if (link.action === "signout") {
+              window.RE_AUTH?.signOut();
+            } else if (link.url) {
+              window.location.href = link.url;
+            }
+            return;
+          }
+        }
+      }
       // Play
       if (pointInRect(sx, sy, mr.play)) {
         audio.playSFX("click");
@@ -3925,6 +4069,7 @@ function startGame(difficulty) {
     game.difficulty = difficulty;
     game.preset = DIFFICULTY_PRESETS[difficulty];
   }
+  applyTeamSkin(); // applique le skin courant aux COLORS.player avant resetGame
   resetGame();
   game.screen = "playing";
   saveSettings();

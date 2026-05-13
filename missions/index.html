@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Missions — Robotic Emergence</title>
+  <link rel="stylesheet" href="/lib/theme.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav">
+      <a href="/prototype/">🎮 Jouer</a>
+      <a href="/shop/">🛍️ Boutique</a>
+      <a href="/missions/" class="active">🎯 Missions</a>
+      <a href="/profile/">👤 Profil</a>
+      <span class="spacer"></span>
+      <span id="adminLink"></span>
+      <span class="currency-pill" id="currencyPill">— 💰</span>
+      <button class="btn-secondary" id="signoutBtn" style="padding: 6px 12px; font-size: 12px;">Déconnexion</button>
+    </div>
+
+    <h1>🎯 Missions</h1>
+    <p class="muted">Complète des objectifs en jouant et réclame ta récompense ici.</p>
+
+    <div id="msg"></div>
+    <div id="missionsList"></div>
+  </div>
+
+  <script type="module">
+    import { supabase, getProfile, requireSession } from "/lib/supabase.js";
+
+    await requireSession("/auth/login.html?next=" + encodeURIComponent(location.pathname));
+    let profile = await getProfile();
+    document.getElementById("currencyPill").textContent = `${profile.currency} 💰`;
+    if (profile.is_admin) {
+      document.getElementById("adminLink").innerHTML = `<a href="/admin/" style="padding:6px 12px; font-size:12px;">⚙️ Admin</a>`;
+    }
+
+    document.getElementById("signoutBtn").addEventListener("click", async () => {
+      await supabase.auth.signOut();
+      location.href = "/auth/login.html";
+    });
+
+    const { data: missions } = await supabase
+      .from("re_missions")
+      .select("*")
+      .eq("is_active", true)
+      .order("sort_order");
+
+    const { data: userMissions } = await supabase
+      .from("re_user_missions")
+      .select("*")
+      .eq("user_id", profile.id);
+
+    const progressMap = {};
+    for (const um of (userMissions || [])) progressMap[um.mission_id] = um;
+
+    const list = document.getElementById("missionsList");
+    const msg = document.getElementById("msg");
+
+    function render() {
+      list.innerHTML = "";
+      for (const m of missions) {
+        const um = progressMap[m.id] || { progress: 0, completed_at: null, claimed_at: null };
+        const progress = Math.min(um.progress, m.objective_value);
+        const pct = (progress / m.objective_value) * 100;
+        const completed = um.progress >= m.objective_value;
+        const claimed = um.claimed_at && !m.is_repeatable;
+        const claimable = completed && !claimed;
+        const div = document.createElement("div");
+        div.className = `mission-card ${completed ? "completed" : ""} ${claimed ? "claimed" : ""}`;
+        div.innerHTML = `
+          <div class="row-between">
+            <div>
+              <div style="font-weight:700; font-size:15px;">${m.title}</div>
+              <div class="muted small">${m.description || ""}</div>
+            </div>
+            <div style="text-align:right">
+              <div style="color: var(--warn); font-weight:700">+${m.reward} 💰</div>
+              ${m.is_repeatable ? `<div class="badge badge-rare" style="margin-top:4px">RÉPÉTABLE</div>` : ""}
+            </div>
+          </div>
+          <div class="progress-bar"><div style="width: ${pct}%"></div></div>
+          <div class="row-between small" style="margin-top:6px">
+            <span class="muted">${progress} / ${m.objective_value}</span>
+            ${claimable
+              ? `<button data-claim="${m.id}" style="padding: 6px 14px; font-size:12px;">Réclamer la récompense</button>`
+              : claimed
+                ? `<span class="muted small">✓ Réclamé</span>`
+                : `<span class="muted small">${completed ? "✓ Prêt à réclamer" : "En cours"}</span>`}
+          </div>
+        `;
+        list.appendChild(div);
+      }
+    }
+    render();
+
+    list.addEventListener("click", async (e) => {
+      const id = e.target.dataset.claim;
+      if (!id) return;
+      e.target.disabled = true; e.target.textContent = "…";
+      const { data, error } = await supabase.rpc("re_claim_mission", { p_mission_id: id });
+      if (error || !data?.ok) {
+        msg.innerHTML = `<div class="msg msg-error">${error?.message || data?.error}</div>`;
+        return;
+      }
+      // Update local state
+      const um = progressMap[id] || {};
+      um.claimed_at = new Date().toISOString();
+      if (missions.find(m => m.id === id).is_repeatable) um.progress = 0;
+      progressMap[id] = um;
+      profile.currency += data.reward;
+      document.getElementById("currencyPill").textContent = `${profile.currency} 💰`;
+      msg.innerHTML = `<div class="msg msg-success">+${data.reward} 💰 ajoutés à ton solde !</div>`;
+      render();
+    });
+  </script>
+</body>
+</html>
