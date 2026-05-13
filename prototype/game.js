@@ -24,6 +24,52 @@ const CONFIG = {
   GATE_H: 100,
 };
 
+// Layout du HUD (barre du haut) — constantes partagées pour éviter les
+// décalages quand on ajoute/retire des boutons. Ordre gauche → droite :
+// [💰 money] [7 build buttons] [4 spell buttons] [timer] [⚙ gear]
+// Toutes les positions x sont dérivées des helpers hudBuildX/hudSpellX/...
+const HUD_LAYOUT = {
+  Y: 12,
+  BTN_H: 36,
+  // Build section
+  BUILD_X: 130,
+  BUILD_BTN_W: 92,
+  BUILD_BTN_GAP: 4,
+  BUILD_COUNT: 7,
+  // Spell section
+  SPELL_BTN_W: 82,
+  SPELL_BTN_GAP: 6,
+  SPELL_COUNT: 4,
+  // Right block
+  TIMER_W: 58,
+  GEAR_W: 36,
+  // Spacings
+  SECTION_GAP: 16,
+  RIGHT_PAD: 12,
+};
+
+function hudBuildX(idx) {
+  return HUD_LAYOUT.BUILD_X + idx * (HUD_LAYOUT.BUILD_BTN_W + HUD_LAYOUT.BUILD_BTN_GAP);
+}
+function hudBuildEndX() {
+  return hudBuildX(HUD_LAYOUT.BUILD_COUNT - 1) + HUD_LAYOUT.BUILD_BTN_W;
+}
+function hudSpellStartX() {
+  return hudBuildEndX() + HUD_LAYOUT.SECTION_GAP;
+}
+function hudSpellX(idx) {
+  return hudSpellStartX() + idx * (HUD_LAYOUT.SPELL_BTN_W + HUD_LAYOUT.SPELL_BTN_GAP);
+}
+function hudSpellEndX() {
+  return hudSpellX(HUD_LAYOUT.SPELL_COUNT - 1) + HUD_LAYOUT.SPELL_BTN_W;
+}
+function hudGearX() {
+  return CONFIG.CANVAS_W - HUD_LAYOUT.RIGHT_PAD - HUD_LAYOUT.GEAR_W;
+}
+function hudTimerX() {
+  return hudGearX() - 10 - HUD_LAYOUT.TIMER_W;
+}
+
 // Couleurs joueur par défaut (overridées par le skin Supabase via applyTeamSkin())
 const DEFAULT_PLAYER_COLOR = "#3b82f6";
 const DEFAULT_PLAYER_DARK = "#1e40af";
@@ -1373,16 +1419,13 @@ function buildHudButtons() {
   // 7 boutons (raccourcis 1-7) — médic en avant-dernier, turret en dernier
   // (placement sur le mur, pas sur la grille).
   const types = ["light", "heavy", "swarmer", "sniper", "air", "medic", "turret"];
-  const startX = 130;
-  const btnW = 92;   // 100 -> 92 pour faire tenir 7 boutons sans déborder
-  const btnGap = 4;
   game.ui.buttons = types.map((t, i) => ({
     id: `build-${t}`,
     type: t,
-    x: startX + i * (btnW + btnGap),
-    y: 12,
-    w: btnW,
-    h: 36,
+    x: hudBuildX(i),
+    y: HUD_LAYOUT.Y,
+    w: HUD_LAYOUT.BUILD_BTN_W,
+    h: HUD_LAYOUT.BTN_H,
   }));
 }
 
@@ -6391,15 +6434,16 @@ function drawHUD(ctx) {
   ctx.textBaseline = "middle";
   ctx.fillText(`💰 ${game[mineForHud].money}`, 20, CONFIG.HUD_H / 2 - 8);
 
-  // Solde global (currency Supabase) + username sous le solde de partie
+  // Username sous le solde de partie (solde global retiré : consultable dans
+  // la boutique, pas critique en partie, et débordait sur le bouton "Légère").
   const profile = window.RE_AUTH?.profile;
   ctx.font = "10px -apple-system, sans-serif";
   ctx.fillStyle = COLORS.hudMuted;
   if (profile) {
     const mpTag = (game.mode === "mp" && game.mp?.role) ? ` · ${game.mp.role === "host" ? "Hôte" : "Invité"}` : "";
-    ctx.fillText(`👤 ${profile.username || "joueur"} · 💰 ${profile.currency} global${mpTag}`, 20, CONFIG.HUD_H / 2 + 10);
+    ctx.fillText(`👤 ${profile.username || "joueur"}${mpTag}`, 20, CONFIG.HUD_H / 2 + 10);
   } else {
-    ctx.fillText("invité — connecte-toi pour gagner", 20, CONFIG.HUD_H / 2 + 10);
+    ctx.fillText("invité — connecte-toi", 20, CONFIG.HUD_H / 2 + 10);
   }
 
   // Boutons "Construire" (mode build) + bouton spécial éclair
@@ -6411,27 +6455,31 @@ function drawHUD(ctx) {
   drawSettingsButton(ctx);
   drawSurrenderButton(ctx);
 
-  // Argent de l'adversaire (droite). En MP on ajoute son pseudo.
+  // Bloc droit : timer (haut) + argent adversaire (bas) — dans la zone dédiée
+  // entre les sorts et le gear. Plus de chevauchement avec les boutons.
+  const timerCx = hudTimerX() + HUD_LAYOUT.TIMER_W / 2;
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 16px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const min = Math.floor(game.time / 60);
+  const sec = Math.floor(game.time % 60).toString().padStart(2, "0");
+  ctx.fillText(`${min}:${sec}`, timerCx, CONFIG.HUD_H / 2 - 8);
+
+  // Argent adversaire juste sous le timer, dans la couleur du camp opposé.
   ctx.fillStyle = oppForHud === "player" ? COLORS.player : COLORS.enemy;
-  ctx.textAlign = "right";
-  ctx.fillText(`${game[oppForHud].money} 💰`, CONFIG.CANVAS_W - 20, CONFIG.HUD_H / 2 - 8);
+  ctx.font = "bold 11px -apple-system, sans-serif";
+  ctx.fillText(`${game[oppForHud].money} 💰`, timerCx, CONFIG.HUD_H / 2 + 10);
+
+  // Pseudo de l'adversaire (MP uniquement) : sous la barre HUD, près du
+  // bouton Abandonner (qui est aussi en dessous), pas dans la barre du haut.
   if (game.mode === "mp" && game.mp?.opponent?.username) {
     ctx.fillStyle = COLORS.hudMuted;
     ctx.font = "10px -apple-system, sans-serif";
-    ctx.fillText(`👤 ${game.mp.opponent.username}`, CONFIG.CANVAS_W - 20, CONFIG.HUD_H / 2 + 10);
+    ctx.textAlign = "right";
+    ctx.fillText(`👤 ${game.mp.opponent.username}`,
+                 CONFIG.CANVAS_W - HUD_LAYOUT.RIGHT_PAD, CONFIG.HUD_H + 6);
   }
-
-  // Timer (sous le centre du HUD)
-  ctx.fillStyle = COLORS.hudText;
-  ctx.font = "bold 14px -apple-system, sans-serif";
-  ctx.textAlign = "center";
-  const min = Math.floor(game.time / 60);
-  const sec = Math.floor(game.time % 60).toString().padStart(2, "0");
-  ctx.fillText(`${min}:${sec}`, CONFIG.CANVAS_W - 90, CONFIG.HUD_H / 2);
-
-  ctx.fillStyle = COLORS.hudMuted;
-  ctx.font = "10px -apple-system, sans-serif";
-  ctx.fillText("ÉMERGENCE", CONFIG.CANVAS_W - 90, CONFIG.HUD_H / 2 + 14);
 
   // Indicateur de mode build actif (instruction)
   if (game.ui.selectedBuildType) {
@@ -6479,15 +6527,19 @@ function drawBuildButtons(ctx) {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    ctx.fillStyle = canAfford ? COLORS.hudText : COLORS.hudMuted;
-    ctx.font = "bold 12px -apple-system, sans-serif";
+    // Label (haut) + coût (bas) empilés verticalement, comme les boutons sorts.
+    // Évite le débordement horizontal sur les labels longs ("Aérienne", "Swarmer").
+    const cx = btn.x + btn.w / 2;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(`${icon} ${label}`, btn.x + btn.w / 2 - 16, btn.y + btn.h / 2);
+
+    ctx.fillStyle = canAfford ? COLORS.hudText : COLORS.hudMuted;
+    ctx.font = "bold 12px -apple-system, sans-serif";
+    ctx.fillText(`${icon} ${label}`, cx, btn.y + btn.h / 2 - 6);
 
     ctx.fillStyle = canAfford ? "#fbbf24" : COLORS.hudMuted;
-    ctx.font = "bold 12px -apple-system, sans-serif";
-    ctx.fillText(`${cost}💰`, btn.x + btn.w / 2 + 34, btn.y + btn.h / 2);
+    ctx.font = "bold 10px -apple-system, sans-serif";
+    ctx.fillText(`${cost} 💰`, cx, btn.y + btn.h / 2 + 9);
   }
 
   // Tooltip de caractéristiques au survol — affiché après les boutons
@@ -6690,11 +6742,11 @@ async function trySurrender() {
 }
 
 function drawSettingsButton(ctx) {
-  // Position : APRÈS Lightning, IEM, Drop, Surge (4 × 110px + gaps).
-  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 8 + 110 + 8 + 110 + 8 + 110 + 10;
-  const btnY = 12;
-  const btnW = 36;
-  const btnH = 36;
+  // Position : tout à droite du HUD, après les sorts + le timer.
+  const btnX = hudGearX();
+  const btnY = HUD_LAYOUT.Y;
+  const btnW = HUD_LAYOUT.GEAR_W;
+  const btnH = HUD_LAYOUT.BTN_H;
   game.ui.settingsBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
   const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.settingsBtn);
 
@@ -6883,10 +6935,10 @@ function drawAudioSlider(ctx, x, y, width, value, enabled) {
 
 // Bouton IEM — placé à droite de l'éclair. Couleur cyan (impulsion EM).
 function drawIemButton(ctx) {
-  const btnW = 110;
-  const btnH = 36;
-  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 8; // après le bouton Éclair (110 + 8 de marge)
-  const btnY = 12;
+  const btnW = HUD_LAYOUT.SPELL_BTN_W;
+  const btnH = HUD_LAYOUT.BTN_H;
+  const btnX = hudSpellX(1);
+  const btnY = HUD_LAYOUT.Y;
   game.ui.iemBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
 
   const cd = iemCdFor(mySide());
@@ -6990,11 +7042,11 @@ function drawSpellButton(ctx, opts) {
 
 // Bouton Drop Renforts — placé à droite du bouton IEM. Couleur ambre.
 function drawDropButton(ctx) {
-  const btnW = 110, btnH = 36;
-  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 8 + 110 + 8;
+  const btnW = HUD_LAYOUT.SPELL_BTN_W, btnH = HUD_LAYOUT.BTN_H;
+  const btnX = hudSpellX(2);
   drawSpellButton(ctx, {
     id: "dropBtn",
-    x: btnX, y: 12, w: btnW, h: btnH,
+    x: btnX, y: HUD_LAYOUT.Y, w: btnW, h: btnH,
     label: "🪂 Drop",
     cost: DROP_COST,
     cd: dropCdFor(mySide()),
@@ -7008,8 +7060,8 @@ function drawDropButton(ctx) {
 
 // Bouton Surge Économique — placé à droite du Drop. Couleur vert pastel.
 function drawSurgeButton(ctx) {
-  const btnW = 110, btnH = 36;
-  const btnX = 130 + 6 * (100 + 4) + 12 + 110 + 8 + 110 + 8 + 110 + 8;
+  const btnW = HUD_LAYOUT.SPELL_BTN_W, btnH = HUD_LAYOUT.BTN_H;
+  const btnX = hudSpellX(3);
   const me = mySide();
   const surgeActive = (game[me].surgeUntil || 0) > game.time;
   const subLabel = surgeActive
@@ -7017,7 +7069,7 @@ function drawSurgeButton(ctx) {
     : `${SURGE_COST} 💰`;
   drawSpellButton(ctx, {
     id: "surgeBtn",
-    x: btnX, y: 12, w: btnW, h: btnH,
+    x: btnX, y: HUD_LAYOUT.Y, w: btnW, h: btnH,
     label: "📈 Surge",
     cost: SURGE_COST,
     cd: surgeCdFor(me),
@@ -7069,10 +7121,10 @@ function drawIemFx(ctx) {
 }
 
 function drawLightningButton(ctx) {
-  const btnW = 110;
-  const btnH = 36;
-  const btnX = 130 + 6 * (100 + 4) + 12;
-  const btnY = 12;
+  const btnW = HUD_LAYOUT.SPELL_BTN_W;
+  const btnH = HUD_LAYOUT.BTN_H;
+  const btnX = hudSpellX(0);
+  const btnY = HUD_LAYOUT.Y;
   game.ui.lightningBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
 
   const myCd = lightningCdFor(mySide());
