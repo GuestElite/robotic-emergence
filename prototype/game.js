@@ -102,6 +102,14 @@ const FACTORY_TYPES = {
     hp: 130,
     unitType: "air",
   },
+  medic: {
+    id: "medic",
+    label: "Médic",
+    cost: 140,
+    prodInterval: 3.4,
+    hp: 120,
+    unitType: "medic",
+  },
 };
 
 const UNIT_TYPES = {
@@ -135,6 +143,16 @@ const UNIT_TYPES = {
     range: 75, attackInterval: 1.1, killReward: 30,
     layer: "air",
     canTargetAir: true, // les drones peuvent tirer sur tout : sol + air
+  },
+  // Le médic ne fait PAS de dégâts. Au lieu de cibler des ennemis, il
+  // cible les alliés blessés à portée et leur applique un heal périodique.
+  // damage = montant soigné par tick ; range = rayon de soin.
+  medic: {
+    id: "medic",
+    hp: 45, damage: 12, speed: 85, radius: 9,
+    range: 95, attackInterval: 1.0, killReward: 0,
+    layer: "ground", canTargetAir: false,
+    isMedic: true, // flag pour la logique de ciblage
   },
 };
 
@@ -219,6 +237,7 @@ function spawnStatsFor(factory) {
     killReward:     Math.round(ut.killReward * (tier === 1 ? 1 : tier === 2 ? 1.7 : 2.8)),
     layer:          ut.layer || "ground",
     canTargetAir:   !!ut.canTargetAir,
+    isMedic:        !!ut.isMedic,
     tier,
   };
 }
@@ -245,7 +264,7 @@ const DIFFICULTY_PRESETS = {
     aiBuildInterval: 7.5,
     aiStartMoney: 60,
     aiHeavyChance: 0.15,
-    aiTypeWeights: { light: 42, heavy: 18, swarmer: 22, sniper: 10, air: 8 },
+    aiTypeWeights: { light: 42, heavy: 18, swarmer: 22, sniper: 10, air: 8, medic: 6 },
     playerStartMoney: 150,
     playerBaseHP: 1500,
     enemyBaseHP: 700,
@@ -258,7 +277,7 @@ const DIFFICULTY_PRESETS = {
     aiBuildInterval: 5.0,
     aiStartMoney: 100,
     aiHeavyChance: 0.30,
-    aiTypeWeights: { light: 30, heavy: 22, swarmer: 22, sniper: 14, air: 12 },
+    aiTypeWeights: { light: 30, heavy: 22, swarmer: 22, sniper: 14, air: 12, medic: 8 },
     playerStartMoney: 100,
     playerBaseHP: 1000,
     enemyBaseHP: 1000,
@@ -271,7 +290,7 @@ const DIFFICULTY_PRESETS = {
     aiBuildInterval: 3.5,
     aiStartMoney: 150,
     aiHeavyChance: 0.45,
-    aiTypeWeights: { light: 22, heavy: 26, swarmer: 22, sniper: 14, air: 16 },
+    aiTypeWeights: { light: 22, heavy: 26, swarmer: 22, sniper: 14, air: 16, medic: 10 },
     playerStartMoney: 80,
     playerBaseHP: 700,
     enemyBaseHP: 1500,
@@ -685,8 +704,8 @@ function makeStats() {
     damageTaken: 0,
     borderHits: 0,
     lightningsUsed: 0,
-    factoriesBuiltByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0, air: 0 },
-    unitsSpawnedByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0, air: 0 },
+    factoriesBuiltByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0, air: 0, medic: 0 },
+    unitsSpawnedByType: { light: 0, heavy: 0, swarmer: 0, sniper: 0, air: 0, medic: 0 },
   };
 }
 
@@ -1196,10 +1215,11 @@ function getPathCenterY() {
 // -------------------------------------------------------------
 
 function buildHudButtons() {
-  // 6 boutons (raccourcis 1-6) — turret en dernier (placement sur le mur, pas sur la grille)
-  const types = ["light", "heavy", "swarmer", "sniper", "air", "turret"];
+  // 7 boutons (raccourcis 1-7) — médic en avant-dernier, turret en dernier
+  // (placement sur le mur, pas sur la grille).
+  const types = ["light", "heavy", "swarmer", "sniper", "air", "medic", "turret"];
   const startX = 130;
-  const btnW = 100;
+  const btnW = 92;   // 100 -> 92 pour faire tenir 7 boutons sans déborder
   const btnGap = 4;
   game.ui.buttons = types.map((t, i) => ({
     id: `build-${t}`,
@@ -1547,6 +1567,24 @@ function canEngage(attacker, target) {
 }
 
 function findTargetFor(u) {
+  // Cas médic : cible l'allié blessé le plus prioritaire à portée.
+  // Priorité = HP manquants (qui a perdu le plus de PV).
+  if (u.stats?.isMedic) {
+    let best = null;
+    let bestMissing = 0;
+    for (const other of game.units) {
+      if (other === u) continue;
+      if (other.side !== u.side || other.hp <= 0) continue;
+      if (other.stats?.isMedic) continue; // un médic ne se soigne pas / pas d'autre médic
+      const missing = (other.maxHp || other.stats?.hp || 0) - other.hp;
+      if (missing <= 0) continue; // déjà au max
+      const d = dist(u.x, u.y, other.x, other.y);
+      if (d > u.stats.range) continue;
+      if (missing > bestMissing) { best = other; bestMissing = missing; }
+    }
+    return best;
+  }
+
   const enemySide = u.side === "player" ? "enemy" : "player";
   const isDef = u.mode === "defense";
 
@@ -1576,6 +1614,12 @@ function findTargetFor(u) {
 
 function applyDamage(target, amount, attacker) {
   const wasAlive = target.hp > 0;
+  // amount < 0 = soin (médic). Clamp aux PV max.
+  if (amount < 0) {
+    const maxHp = target.maxHp || target.stats?.hp || target.hp;
+    target.hp = Math.min(maxHp, target.hp - amount);
+    return;
+  }
   target.hp -= amount;
   if (attacker) {
     game.stats[attacker.side].damageDealt += amount;
@@ -1589,6 +1633,14 @@ function applyDamage(target, amount, attacker) {
     }
     audio.playSFX("death");
   }
+}
+
+// FX visuel du soin : petite traînée verte du médic vers la cible + halo
+// circulaire au point d'arrivée. On réutilise game.flashes (structure unifiée
+// pour les effets ponctuels au-dessus du sol).
+function spawnHealFx(sx, sy, tx, ty) {
+  if (!game.flashes) game.flashes = [];
+  game.flashes.push({ kind: "heal", x: sx, y: sy, tx, ty, age: 0, ttl: 0.4 });
 }
 
 function spawnExplosion(x, y, side) {
@@ -1638,12 +1690,21 @@ function updateUnits(dt) {
       const d = dist(u.x, u.y, u.target.x, u.target.y);
       if (d <= u.stats.range) {
         if (u.attackCooldown === 0) {
-          applyDamage(u.target, u.stats.damage, u);
+          if (u.stats.isMedic) {
+            // Soin : applique un damage NÉGATIF pour incrémenter les PV, clamp
+            // à maxHp côté applyDamage. Trigger un FX vert + ne joue pas
+            // le bruit "shoot".
+            const healAmt = u.stats.damage;
+            applyDamage(u.target, -healAmt, u);
+            spawnHealFx(u.x, u.y, u.target.x, u.target.y);
+          } else {
+            applyDamage(u.target, u.stats.damage, u);
+            // Bolt visuel qui voyage du tireur à la cible (style Star Wars blaster
+            // par type d'unité — light/heavy/swarmer/sniper/air ont chacun leur profil)
+            spawnProjectile(u.x, u.y, u.target.x, u.target.y, u.typeId, u.side);
+            audio.playSFX(`shoot-${u.typeId}`);
+          }
           u.attackCooldown = u.stats.attackInterval;
-          // Bolt visuel qui voyage du tireur à la cible (style Star Wars blaster
-          // par type d'unité — light/heavy/swarmer/sniper/air ont chacun leur profil)
-          spawnProjectile(u.x, u.y, u.target.x, u.target.y, u.typeId, u.side);
-          audio.playSFX(`shoot-${u.typeId}`);
         }
         continue;
       }
@@ -2790,6 +2851,27 @@ function drawFactoryPlaceholder(ctx, typeId, side, x, y, w, h) {
     ctx.moveTo(cx - 7, y + 8); ctx.lineTo(cx + 7, y + 8);
     ctx.moveTo(cx, y + 1);     ctx.lineTo(cx, y + 15);
     ctx.stroke();
+  } else if (typeId === "medic") {
+    // Centre de soin : base rectangulaire + grosse croix verte au milieu
+    ctx.fillStyle = main;
+    ctx.fillRect(x + 4, y + 8, w - 8, h - 12);
+    // Toit accent
+    ctx.fillStyle = accent;
+    ctx.fillRect(x + 4, y + 8, w - 8, 4);
+    // Croix médicale verte
+    ctx.fillStyle = "#22c55e";
+    const ch = h * 0.45;
+    const cw = w * 0.55;
+    const ct = w * 0.16;
+    ctx.fillRect(cx - cw / 2, cy - ct / 2, cw, ct);
+    ctx.fillRect(cx - ct / 2, cy - ch / 2, ct, ch);
+    // Halo vert pulsant
+    const pulse = 0.5 + 0.5 * Math.sin((game.time || 0) * 3);
+    ctx.strokeStyle = `rgba(74, 222, 128, ${(0.4 + 0.4 * pulse).toFixed(3)})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.min(w, h) * 0.42, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   // Cadre d'accent partagé
@@ -3155,6 +3237,21 @@ function drawUnitPlaceholder(ctx, u, radius) {
     ctx.arc(u.x, u.y, radius * 0.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  // Médic : croix médicale verte au centre
+  if (u.typeId === "medic") {
+    ctx.fillStyle = "#bbf7d0";
+    const cw = radius * 0.65;
+    const ct = radius * 0.22;
+    ctx.fillRect(u.x - cw / 2, u.y - ct / 2, cw, ct);
+    ctx.fillRect(u.x - ct / 2, u.y - cw / 2, ct, cw);
+    // Petit halo vert pulsant pour rappeler son rôle
+    const pulse = 0.5 + 0.5 * Math.sin((game.time || 0) * 3 + u.x * 0.05);
+    ctx.strokeStyle = `rgba(74, 222, 128, ${(0.4 + 0.3 * pulse).toFixed(3)})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(u.x, u.y, radius + 2, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 }
 
 // Legacy — vide en pratique. Conservé au cas où du vieux code spawne encore
@@ -3338,6 +3435,27 @@ function drawFlashes(ctx) {
       ctx.beginPath();
       ctx.arc(f.x, f.y, r * 0.4, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
+    } else if (f.kind === "heal") {
+      // Heal = trait vert pulsant du soigneur à la cible + croix au-dessus de la cible
+      const fadeOut = Math.max(0, 1 - t);
+      ctx.save();
+      ctx.strokeStyle = `rgba(74, 222, 128, ${(fadeOut * 0.85).toFixed(3)})`;
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = "#22c55e";
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(f.x, f.y);
+      ctx.lineTo(f.tx, f.ty);
+      ctx.stroke();
+      // Croix verte au point d'arrivée qui grossit
+      const cr = 4 + 6 * t;
+      ctx.strokeStyle = `rgba(187, 247, 208, ${fadeOut.toFixed(3)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(f.tx - cr, f.ty); ctx.lineTo(f.tx + cr, f.ty);
+      ctx.moveTo(f.tx, f.ty - cr); ctx.lineTo(f.tx, f.ty + cr);
+      ctx.stroke();
       ctx.restore();
     } else if (f.kind === "impact") {
       // Impact = étoile + cercle qui s'élargit
@@ -4630,7 +4748,7 @@ function drawMenu(ctx) {
   ctx.fillStyle = COLORS.hudMuted;
   ctx.font = "11px -apple-system, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("Souris bord G/D pour scroller — ← → / A D — H / E pour recadrer — Échap pour annuler — 1-5 sélection bâtiment", cx, 632);
+  ctx.fillText("Souris bord G/D pour scroller — ← → / A D — H / E pour recadrer — Échap pour annuler — 1-7 sélection bâtiment", cx, 632);
 
   // ── BANDEAU AUTH / PROFIL ──
   const profile = window.RE_AUTH?.profile;
@@ -5031,7 +5149,7 @@ function drawHUD(ctx) {
 }
 
 function drawBuildButtons(ctx) {
-  const ICONS = { light: "🏭", heavy: "🏭", swarmer: "🏭", sniper: "🏭", air: "✈️", turret: "🗼" };
+  const ICONS = { light: "🏭", heavy: "🏭", swarmer: "🏭", sniper: "🏭", air: "✈️", medic: "⚕️", turret: "🗼" };
   let hoveredBtn = null;
   for (const btn of game.ui.buttons) {
     const isTurret = btn.type === "turret";
@@ -5093,14 +5211,23 @@ function buildTooltipRows(type) {
   rows.push({ label: "Usine PV", value: String(factory.hp) });
   rows.push({ label: "Cadence prod", value: `1 unité / ${factory.prodInterval}s` });
   rows.push({ label: "Unité PV", value: String(unit.hp) });
-  rows.push({ label: "Dégâts", value: String(unit.damage) });
-  rows.push({ label: "Portée", value: `${unit.range} px` });
-  rows.push({ label: "Cadence tir", value: `1 tir / ${unit.attackInterval}s` });
-  rows.push({ label: "Vitesse", value: `${unit.speed} px/s` });
-  rows.push({ label: "Couche", value: unit.layer === "air" ? "Aérienne ✈️" : "Sol 🚜" });
-  let targets = unit.layer === "air" ? "Sol + Air" : (unit.canTargetAir ? "Sol + Air" : "Sol uniquement");
-  rows.push({ label: "Cibles", value: targets });
-  rows.push({ label: "Récompense", value: `+${unit.killReward} 💰 par kill` });
+  if (unit.isMedic) {
+    rows.push({ label: "Type", value: "🩹 Soigneur" });
+    rows.push({ label: "Soin", value: `+${unit.damage} PV / tick` });
+    rows.push({ label: "Portée", value: `${unit.range} px` });
+    rows.push({ label: "Cadence", value: `1 soin / ${unit.attackInterval}s` });
+    rows.push({ label: "Vitesse", value: `${unit.speed} px/s` });
+    rows.push({ label: "Cibles", value: "Alliés blessés" });
+  } else {
+    rows.push({ label: "Dégâts", value: String(unit.damage) });
+    rows.push({ label: "Portée", value: `${unit.range} px` });
+    rows.push({ label: "Cadence tir", value: `1 tir / ${unit.attackInterval}s` });
+    rows.push({ label: "Vitesse", value: `${unit.speed} px/s` });
+    rows.push({ label: "Couche", value: unit.layer === "air" ? "Aérienne ✈️" : "Sol 🚜" });
+    let targets = unit.layer === "air" ? "Sol + Air" : (unit.canTargetAir ? "Sol + Air" : "Sol uniquement");
+    rows.push({ label: "Cibles", value: targets });
+    rows.push({ label: "Récompense", value: `+${unit.killReward} 💰 par kill` });
+  }
   return rows;
 }
 
@@ -6358,7 +6485,7 @@ function setupInput(canvas) {
         game.ui.upgradePanel = null;
       }
     }
-    const keyMap = { "1": "light", "2": "heavy", "3": "swarmer", "4": "sniper", "5": "air", "6": "turret" };
+    const keyMap = { "1": "light", "2": "heavy", "3": "swarmer", "4": "sniper", "5": "air", "6": "medic", "7": "turret" };
     if (keyMap[evt.key]) {
       const t = keyMap[evt.key];
       game.ui.selectedBuildType = game.ui.selectedBuildType === t ? null : t;
