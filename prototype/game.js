@@ -1350,9 +1350,34 @@ function gameLoop(timestamp) {
   const canvas = document.getElementById("game-canvas");
   const ctx = canvas.getContext("2d");
 
-  update(dt);
+  try {
+    update(dt);
+  } catch (e) {
+    console.error("[update]", e);
+  }
   ctx.clearRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
-  render(ctx);
+  try {
+    render(ctx);
+  } catch (e) {
+    console.error("[render]", e);
+    // Fallback : affiche l'erreur sur le canvas pour pouvoir la voir
+    ctx.fillStyle = "#1a2030";
+    ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+    ctx.fillStyle = "#ef4444";
+    ctx.font = "bold 16px monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("Erreur de rendu :", 20, 20);
+    ctx.fillStyle = "#fff";
+    ctx.font = "12px monospace";
+    const msg = String(e && (e.stack || e.message || e));
+    msg.split("\n").slice(0, 12).forEach((line, i) => {
+      ctx.fillText(line.slice(0, 110), 20, 50 + i * 16);
+    });
+    ctx.fillStyle = "#fbbf24";
+    ctx.font = "11px monospace";
+    ctx.fillText("→ F12 pour la console (rechargement = F5 pour réessayer)", 20, 280);
+  }
 
   requestAnimationFrame(gameLoop);
 }
@@ -2266,7 +2291,7 @@ function drawWallSlots(ctx, side) {
   for (let i = 0; i < state.wallSlots.length; i++) {
     const slot = state.wallSlots[i];
     if (slot.turret) {
-      // Socle visuel sur le rempart (le turret lui-même est rendu via drawUnits)
+      // Socle du turret (le turret lui-même rendu via drawUnits)
       ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
       ctx.fillRect(slot.x, slot.y + slot.h * 0.2, slot.w, slot.h * 0.6);
       ctx.strokeStyle = "rgba(255,255,255,0.3)";
@@ -2274,29 +2299,36 @@ function drawWallSlots(ctx, side) {
       ctx.strokeRect(slot.x + 0.5, slot.y + slot.h * 0.2 + 0.5, slot.w - 1, slot.h * 0.6 - 1);
       continue;
     }
-    if (buildMode) {
-      const hover = game.ui.hoverWallSlot;
-      const isHover = hover && hover.side === "player" && hover.idx === i;
-      const canAfford = game.player.money >= TURRET_TYPE.cost;
-      // Pulse subtil sur les slots non-survolés (rend l'emplacement évident)
-      const pulse = 0.5 + 0.3 * Math.sin(game.time * 4 + i);
-      const baseAlpha = canAfford ? (0.25 + 0.15 * pulse) : 0.18;
-      ctx.fillStyle = isHover
-        ? (canAfford ? "rgba(34, 211, 238, 0.70)" : "rgba(239, 68, 68, 0.55)")
-        : (canAfford ? `rgba(34, 211, 238, ${baseAlpha})` : "rgba(239, 68, 68, 0.15)");
-      ctx.fillRect(slot.x, slot.y, slot.w, slot.h);
-      ctx.strokeStyle = isHover ? "#fff" : (canAfford ? "rgba(34, 211, 238, 0.95)" : "rgba(239, 68, 68, 0.65)");
-      ctx.lineWidth = isHover ? 2 : 1.5;
-      ctx.setLineDash(isHover ? [] : [4, 3]);
-      ctx.strokeRect(slot.x + 0.5, slot.y + 0.5, slot.w - 1, slot.h - 1);
-      ctx.setLineDash([]);
-      // Petite icône turret au centre du slot
-      ctx.fillStyle = canAfford ? "#fff" : "rgba(255,255,255,0.5)";
-      ctx.font = "bold 16px -apple-system, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("🗼", slot.x + slot.w / 2, slot.y + slot.h / 2);
+    if (!buildMode) continue;
+
+    const hover = game.ui.hoverWallSlot;
+    const isHover = hover && hover.side === "player" && hover.idx === i;
+    const canAfford = game.player.money >= TURRET_TYPE.cost;
+
+    // Rect de fond (cyan ou rouge selon affordabilité)
+    if (isHover) {
+      ctx.fillStyle = canAfford ? "rgba(34, 211, 238, 0.65)" : "rgba(239, 68, 68, 0.50)";
+    } else {
+      ctx.fillStyle = canAfford ? "rgba(34, 211, 238, 0.30)" : "rgba(239, 68, 68, 0.18)";
     }
+    ctx.fillRect(slot.x, slot.y, slot.w, slot.h);
+
+    // Bordure
+    ctx.strokeStyle = isHover ? "#fff" : (canAfford ? "rgba(34, 211, 238, 0.9)" : "rgba(239, 68, 68, 0.6)");
+    ctx.lineWidth = isHover ? 2 : 1.5;
+    ctx.strokeRect(slot.x + 0.5, slot.y + 0.5, slot.w - 1, slot.h - 1);
+
+    // Petit symbole + au centre (géométrique, pas d'emoji pour éviter les soucis de fonts)
+    ctx.strokeStyle = canAfford ? "#fff" : "rgba(255,255,255,0.45)";
+    ctx.lineWidth = 2;
+    const cx = slot.x + slot.w / 2;
+    const cy = slot.y + slot.h / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - 6, cy);
+    ctx.lineTo(cx + 6, cy);
+    ctx.moveTo(cx, cy - 6);
+    ctx.lineTo(cx, cy + 6);
+    ctx.stroke();
   }
 }
 
