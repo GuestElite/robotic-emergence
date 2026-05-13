@@ -7226,6 +7226,28 @@ function setupInput(canvas) {
       if (!mr) return;
       audio.ensureCtx(); // débloque l'AudioContext sur le premier clic utilisateur
       audio.startMenuMusic(); // autoplay bloqué jusqu'au 1er clic — démarre ici
+
+      // Dropdown menu music (top-left) : clic chip = toggle, clic option = switch
+      const mmr = game.ui.menuMusicRects || {};
+      if (mmr.chip && pointInRect(sx, sy, mmr.chip)) {
+        game.ui.menuMusicExpanded = !game.ui.menuMusicExpanded;
+        audio.playSFX("click");
+        return;
+      }
+      if (game.ui.menuMusicExpanded && Array.isArray(mmr.options)) {
+        for (const opt of mmr.options) {
+          if (pointInRect(sx, sy, opt)) {
+            audio.setMenuTrack(opt.id);
+            audio.playSFX("click");
+            saveSettings();
+            game.ui.menuMusicExpanded = false;  // collapse après sélection
+            return;
+          }
+        }
+        // Clic hors options → collapse
+        game.ui.menuMusicExpanded = false;
+      }
+
       // Difficulté
       for (const d of mr.diff) {
         if (pointInRect(sx, sy, d.rect)) {
