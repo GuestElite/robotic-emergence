@@ -41,6 +41,7 @@ const RE_AUTH = {
       p_damage_taken:  Math.floor(payload.damageTaken || 0),
       p_turrets_built: payload.turretsBuilt || 0,
       p_lightning_used:payload.lightningUsed || 0,
+      p_mode:          payload.mode === "mp" ? "mp" : "solo",
     });
     if (error || !data?.ok) return { ok: false, error: error?.message || data?.error };
     // Met à jour le solde local

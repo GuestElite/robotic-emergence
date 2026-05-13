@@ -603,8 +603,12 @@ const LIGHTNING_TTL_SEC = 0.55;
 
 function makeSideState(side) {
   const preset = game.preset;
-  const startMoney = side === "player" ? preset.playerStartMoney : preset.aiStartMoney;
-  const baseHP = side === "player" ? preset.playerBaseHP : preset.enemyBaseHP;
+  // En multijoueur, les deux joueurs partent avec le même argent et le même
+  // HP de base (celui du joueur humain). En solo, l'IA garde son économie
+  // différenciée par difficulté.
+  const isMp = game.mode === "mp";
+  const startMoney = (isMp || side === "player") ? preset.playerStartMoney : preset.aiStartMoney;
+  const baseHP = (isMp || side === "player") ? preset.playerBaseHP : preset.enemyBaseHP;
   return {
     side,
     money: startMoney,
@@ -1596,6 +1600,7 @@ async function sendGameResultToBackend(result) {
     damageTaken:   ps.damageTaken,
     turretsBuilt:  ps.turretsBuilt,
     lightningUsed: ps.lightningsUsed,
+    mode:          game.mode === "mp" ? "mp" : "solo",
   };
   try {
     const res = await window.RE_AUTH.finishGame(payload);
