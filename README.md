@@ -4,6 +4,12 @@
 > **Date de démarrage** : 2026-05-12
 > **Working title** : *Project RE* (à nommer définitivement — cf. `01-vision-pitch/working-name.md`)
 
+## 🌐 Lien live
+
+**▶︎ [robotic-emergence.vercel.app](https://robotic-emergence.vercel.app)**
+
+Mis à jour à chaque `git push` sur `main` (une fois l'intégration GitHub activée — voir section [Auto-deploy](#-auto-deploy-vercel) ci-dessous).
+
 ## 🚀 Lancer le prototype
 
 Le serveur HTTP local démarre sur `http://localhost:8765/` et le navigateur s'ouvre automatiquement. Pour arrêter : ferme la fenêtre du terminal (ou Ctrl+C).
@@ -35,6 +41,26 @@ Tu peux aussi lancer manuellement depuis le dossier du projet :
 python3 -m http.server 8765
 # puis ouvre http://localhost:8765/prototype/
 ```
+
+## ☁️ Auto-deploy Vercel
+
+Le prototype est déployé en production sur **[robotic-emergence.vercel.app](https://robotic-emergence.vercel.app)**.
+
+### Activer l'auto-deploy sur push (à faire une fois)
+1. Va sur [vercel.com/julienconciergelite-7113s-projects/robotic-emergence](https://vercel.com/julienconciergelite-7113s-projects/robotic-emergence/settings/git)
+2. Section **Git** → **Connect Git Repository** → sélectionne `GuestElite/robotic-emergence`
+3. Vercel installera l'app GitHub si nécessaire (autoriser l'accès)
+4. Une fois lié : chaque push sur `main` déclenche un déploiement prod, chaque push sur une autre branche / PR génère une preview URL
+
+### Déploiement manuel via CLI (si auto-deploy non activé)
+```bash
+cd robotic-emergence
+vercel --prod
+```
+La config `vercel.json` :
+- redirige `/` vers `/prototype/`
+- no-cache sur les fichiers du proto (pour voir les updates direct)
+- cache court (1h) sur les sprites
 
 ## Hub du projet
 
