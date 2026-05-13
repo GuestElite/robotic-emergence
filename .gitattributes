@@ -1,0 +1,22 @@
+# Garde LF (Unix) pour les scripts shell, sinon bash macOS/Linux casse
+*.sh        text eol=lf
+*.command   text eol=lf
+
+# Garde CRLF pour les .bat (cmd.exe Windows)
+*.bat       text eol=crlf
+
+# Texte standard auto-normalisé
+*.md        text
+*.html      text
+*.css       text
+*.js        text
+*.json      text
+*.py        text eol=lf
+
+# Binaires
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.pdf       binary
+*.zip       binary

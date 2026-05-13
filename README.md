@@ -4,14 +4,37 @@
 > **Date de démarrage** : 2026-05-12
 > **Working title** : *Project RE* (à nommer définitivement — cf. `01-vision-pitch/working-name.md`)
 
-## 🚀 Lancer le prototype (Windows)
+## 🚀 Lancer le prototype
 
+Le serveur HTTP local démarre sur `http://localhost:8765/` et le navigateur s'ouvre automatiquement. Pour arrêter : ferme la fenêtre du terminal (ou Ctrl+C).
+
+### 🪟 Windows
 Double-clique sur **`launch-prototype.bat`** à la racine du projet.
-Le serveur HTTP démarre sur `http://localhost:8765/` et le navigateur s'ouvre automatiquement sur le prototype.
 
-Pour arrêter : ferme la fenêtre du terminal (ou Ctrl+C).
+### 🍎 macOS
+Double-clique sur **`launch-prototype.command`** à la racine.
+Si macOS refuse de l'ouvrir (bouton « Ouvrir » grisé) :
+```bash
+chmod +x launch-prototype.command
+```
+puis re-double-clique. Si l'avertissement Gatekeeper persiste : clic droit → **Ouvrir** → **Ouvrir**.
 
-**Dépendances** : le lanceur essaie dans l'ordre `python` → `py` → `node` (npx http-server). Au moins l'un des trois doit être installé. Python recommandé.
+### 🐧 Linux
+Depuis un terminal à la racine du projet :
+```bash
+./launch-prototype.command
+```
+
+### Dépendances
+Le lanceur essaie dans l'ordre `python3` → `python` → `node` (npx http-server).
+Au moins l'un des trois doit être installé. **Python 3 recommandé** (pré-installé sur la plupart des macOS et Linux).
+
+### Sans lanceur (n'importe quel OS)
+Tu peux aussi lancer manuellement depuis le dossier du projet :
+```bash
+python3 -m http.server 8765
+# puis ouvre http://localhost:8765/prototype/
+```
 
 ## Hub du projet
 
