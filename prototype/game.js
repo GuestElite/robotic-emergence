@@ -531,6 +531,10 @@ const SPRITE_FILES = [
   "unit-light-enemy",
   "unit-heavy-player",
   "unit-heavy-enemy",
+  "unit-swarmer-player",
+  "unit-swarmer-enemy",
+  "unit-sniper-player",
+  "unit-sniper-enemy",
 ];
 
 const sprites = {};
