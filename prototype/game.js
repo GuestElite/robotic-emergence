@@ -232,7 +232,7 @@ const DIFFICULTY_PRESETS = {
   easy: {
     label: "Facile",
     emoji: "🟢",
-    desc: "L'IA construit lentement, tu démarres avec plus d'argent et de PV",
+    desc: "IA lente · plus d'argent et de PV",
     aiBuildInterval: 7.5,
     aiStartMoney: 60,
     aiHeavyChance: 0.15,
@@ -245,7 +245,7 @@ const DIFFICULTY_PRESETS = {
   normal: {
     label: "Normal",
     emoji: "🟡",
-    desc: "Équilibré — l'expérience pensée par défaut",
+    desc: "Équilibré — l'expérience par défaut",
     aiBuildInterval: 5.0,
     aiStartMoney: 100,
     aiHeavyChance: 0.30,
@@ -258,7 +258,7 @@ const DIFFICULTY_PRESETS = {
   hard: {
     label: "Difficile",
     emoji: "🔴",
-    desc: "L'IA spam, plus de PV, tu démarres handicapé",
+    desc: "IA agressive · plus de PV ennemi",
     aiBuildInterval: 3.5,
     aiStartMoney: 150,
     aiHeavyChance: 0.45,
@@ -4046,7 +4046,7 @@ function drawMenu(ctx) {
 
   // ── BOUTONS JOUER (Solo / Multijoueur) ──
   const playH = 60;
-  const playW = 230;
+  const playW = 260;
   const playGap = 18;
   const playTotalW = 2 * playW + playGap;
   const playStartX = cx - playTotalW / 2;
