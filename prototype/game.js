@@ -203,15 +203,20 @@ function spawnStatsFor(factory) {
   const ut = UNIT_TYPES[FACTORY_TYPES[factory.typeId].unitType];
   const u = factory.upgrades;
   const tier = factory.tier || 1;
-  const tierMult = TIER_MULTIPLIER[tier] || 1;
+  const tierMult     = TIER_MULTIPLIER[tier] || 1;
+  const speedMult    = TIER_SPEED_MULTIPLIER[tier] || 1;
+  const rangeMult    = TIER_RANGE_MULTIPLIER[tier] || 1;
+  const radiusMult   = TIER_RADIUS_MULTIPLIER[tier] || 1;
+  // Cadence de tir aussi améliorée (plus bas = plus rapide)
+  const attackIntervalMult = tier === 1 ? 1 : tier === 2 ? 0.80 : 0.62;
   return {
     hp:             ut.hp        * statMultiplier(u.health, 0.25) * tierMult,
     damage:         ut.damage    * statMultiplier(u.power, 0.22)  * tierMult,
-    speed:          ut.speed     * statMultiplier(u.speed, 0.15),
-    range:          ut.range     * statMultiplier(u.range, 0.12),
-    radius:         ut.radius * (tier === 1 ? 1 : tier === 2 ? 1.15 : 1.30),
-    attackInterval: ut.attackInterval / statMultiplier(u.shootRate, 0.18),
-    killReward:     Math.round(ut.killReward * (tier === 1 ? 1 : tier === 2 ? 1.5 : 2.2)),
+    speed:          ut.speed     * statMultiplier(u.speed, 0.15)  * speedMult,
+    range:          ut.range     * statMultiplier(u.range, 0.12)  * rangeMult,
+    radius:         ut.radius * radiusMult,
+    attackInterval: (ut.attackInterval / statMultiplier(u.shootRate, 0.18)) * attackIntervalMult,
+    killReward:     Math.round(ut.killReward * (tier === 1 ? 1 : tier === 2 ? 1.7 : 2.8)),
     layer:          ut.layer || "ground",
     canTargetAir:   !!ut.canTargetAir,
     tier,
@@ -1269,12 +1274,14 @@ function tryPlaceFactory(side, slotIndex, typeId) {
 }
 
 // ── FUSION ──────────────────────────────────────────────────────────────
-// Multiplicateur de stats appliqué aux unités produites par une factory fusionnée.
-const TIER_MULTIPLIER = { 1: 1.0, 2: 1.55, 3: 2.40 };
-// Multiplicateur de PV de la factory elle-même
-const TIER_HP_MULTIPLIER = { 1: 1.0, 2: 2.0, 3: 3.6 };
-// Multiplicateur de cadence (plus tier = plus rapide)
-const TIER_PROD_MULTIPLIER = { 1: 1.0, 2: 0.85, 3: 0.65 };
+// Multiplicateurs appliqués aux factories fusionnées (tier II et III).
+// Volontairement généreux pour récompenser le coût d'opportunité (2 ou 4 slots).
+const TIER_MULTIPLIER     = { 1: 1.0, 2: 1.85, 3: 3.10 }; // HP & dégâts unités
+const TIER_HP_MULTIPLIER  = { 1: 1.0, 2: 2.40, 3: 4.50 }; // PV de la factory
+const TIER_PROD_MULTIPLIER= { 1: 1.0, 2: 0.65, 3: 0.42 }; // cadence (× interval — plus bas = plus rapide)
+const TIER_SPEED_MULTIPLIER = { 1: 1.0, 2: 1.06, 3: 1.15 }; // vitesse de l'unité
+const TIER_RANGE_MULTIPLIER = { 1: 1.0, 2: 1.10, 3: 1.22 }; // portée de tir
+const TIER_RADIUS_MULTIPLIER= { 1: 1.0, 2: 1.18, 3: 1.40 }; // taille visuelle
 
 function tierLabel(tier) {
   return tier === 3 ? "TIER III" : tier === 2 ? "TIER II" : "TIER I";
