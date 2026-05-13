@@ -23,8 +23,9 @@ venv/
 # Logs
 *.log
 
-# Art direction — dossier de previews locales (validation avant intégration)
+# Art direction — dossiers de previews locales (validation avant intégration)
 08-art-direction/preview/
+12-biomes/*/preview/
 
 # Vercel CLI
 .vercel

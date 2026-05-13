@@ -490,6 +490,9 @@ function loadSettings() {
       game.difficulty = s.difficulty;
       game.preset = DIFFICULTY_PRESETS[s.difficulty];
     }
+    if (s.biome && ["desert", "jungle", "snow"].includes(s.biome)) {
+      game.biome = s.biome;
+    }
     if (typeof s.musicEnabled === "boolean") audio.musicEnabled = s.musicEnabled;
     if (typeof s.sfxEnabled === "boolean") audio.sfxEnabled = s.sfxEnabled;
     if (typeof s.musicVolume === "number") audio.musicVolume = Math.max(0, Math.min(1, s.musicVolume));
@@ -501,6 +504,7 @@ function saveSettings() {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
       difficulty: game.difficulty,
+      biome: game.biome,
       musicEnabled: audio.musicEnabled,
       sfxEnabled: audio.sfxEnabled,
       musicVolume: audio.musicVolume,
@@ -519,6 +523,7 @@ const game = {
   screen: "menu",
   difficulty: "normal",
   preset: DIFFICULTY_PRESETS.normal,
+  biome: "desert",                // "desert" | "jungle" | "snow" — affecte sprites + gradient sol
   player: null,
   enemy: null,
   units: [],
@@ -706,23 +711,58 @@ const PROP_POSITIONS = [
 
 const sprites = {};
 
-function loadSprite(name) {
+// Sprites qui CHANGENT selon le biome (chargés depuis 12-biomes/{biome}/sprites/
+// si biome != desert, sinon depuis 08-art-direction/sprites/).
+const BIOME_SPECIFIC_SPRITES = new Set([
+  "tile-ground",
+  "unit-light-enemy", "unit-heavy-enemy",
+  "unit-swarmer-enemy", "unit-sniper-enemy",
+  "factory-light-enemy", "factory-heavy-enemy",
+  "factory-swarmer-enemy", "factory-sniper-enemy",
+]);
+
+// Couleur du gradient peint sur le sol par biome (rgba semi-transparent).
+// Ton plus chaud = ombrage cohérent avec l'ambiance du biome.
+const BIOME_GRADIENT_COLOR = {
+  desert: "80, 50, 25",     // brun chaud sable
+  jungle: "30, 50, 15",     // vert sombre humus
+  snow:   "60, 90, 130",    // bleu glacé ombré
+};
+
+// Affichage humain du biome dans l'UI
+const BIOME_LABELS = {
+  desert: "Désert",
+  jungle: "Jungle",
+  snow:   "Neige",
+};
+
+function spritePathFor(name, biome) {
+  if (BIOME_SPECIFIC_SPRITES.has(name) && biome && biome !== "desert") {
+    return `../12-biomes/${biome}/sprites/${name}.png`;
+  }
+  return `../08-art-direction/sprites/${name}.png`;
+}
+
+function loadSprite(name, biome) {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => {
-      sprites[name] = img;
-      resolve();
-    };
-    img.onerror = () => {
-      sprites[name] = null;
-      resolve();
-    };
-    img.src = `../08-art-direction/sprites/${name}.png`;
+    img.onload = () => { sprites[name] = img; resolve(); };
+    img.onerror = () => { sprites[name] = null; resolve(); };
+    img.src = spritePathFor(name, biome || game.biome);
   });
 }
 
 async function loadAllSprites() {
-  await Promise.all(SPRITE_FILES.map(loadSprite));
+  await Promise.all(SPRITE_FILES.map((n) => loadSprite(n, game.biome)));
+}
+
+// Recharge UNIQUEMENT les sprites biome-specific pour le nouveau biome.
+// Appelé quand le user change de biome depuis le menu.
+async function applyBiome(newBiome) {
+  if (!BIOME_LABELS[newBiome]) return;  // biome inconnu, ignore
+  game.biome = newBiome;
+  const toReload = [...BIOME_SPECIFIC_SPRITES].filter((n) => SPRITE_FILES.includes(n));
+  await Promise.all(toReload.map((n) => loadSprite(n, newBiome)));
 }
 
 // -------------------------------------------------------------
@@ -1699,12 +1739,14 @@ function drawGround(ctx) {
   // 2) Overlay gradient vertical peint EN UNE SEULE FOIS sur toute la map
   //    (transparent en haut → sombre en bas). Couvre l'intégralité du
   //    battlefield d'un coup → ZÉRO bande horizontale liée au tilage.
+  //    La couleur de l'ombre dépend du biome actuel.
   const top = CONFIG.HUD_H;
   const bot = CONFIG.H;
+  const gradColor = BIOME_GRADIENT_COLOR[game.biome] || BIOME_GRADIENT_COLOR.desert;
   const grad = ctx.createLinearGradient(0, top, 0, bot);
-  grad.addColorStop(0,    "rgba(0, 0, 0, 0.00)");
-  grad.addColorStop(0.5,  "rgba(80, 50, 25, 0.06)");
-  grad.addColorStop(1,    "rgba(80, 50, 25, 0.22)");
+  grad.addColorStop(0,   "rgba(0, 0, 0, 0.00)");
+  grad.addColorStop(0.5, `rgba(${gradColor}, 0.06)`);
+  grad.addColorStop(1,   `rgba(${gradColor}, 0.22)`);
   ctx.fillStyle = grad;
   ctx.fillRect(0, top, CONFIG.W, bot - top);
 }
@@ -3200,12 +3242,12 @@ function drawMenu(ctx) {
   ctx.fillStyle = COLORS.hudText;
   ctx.font = "bold 14px -apple-system, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("DIFFICULTÉ", cx, 250);
+  ctx.fillText("DIFFICULTÉ", cx, 230);
 
-  const diffBtnW = 180, diffBtnH = 80, diffGap = 14;
+  const diffBtnW = 180, diffBtnH = 72, diffGap = 14;
   const diffTotalW = 3 * diffBtnW + 2 * diffGap;
   const diffStartX = cx - diffTotalW / 2;
-  const diffY = 270;
+  const diffY = 250;
   const diffOrder = ["easy", "normal", "hard"];
   const diffRects = [];
 
@@ -3230,12 +3272,46 @@ function drawMenu(ctx) {
 
     ctx.fillStyle = COLORS.hudMuted;
     ctx.font = "11px -apple-system, sans-serif";
-    wrapText(ctx, preset.desc, rect.x + rect.w / 2, rect.y + 54, rect.w - 16, 13);
+    wrapText(ctx, preset.desc, rect.x + rect.w / 2, rect.y + 50, rect.w - 16, 13);
+  }
+
+  // ── BIOME ──
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 14px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("BIOME", cx, 340);
+
+  const biomeBtnW = 130, biomeBtnH = 56, biomeGap = 14;
+  const biomeTotalW = 3 * biomeBtnW + 2 * biomeGap;
+  const biomeStartX = cx - biomeTotalW / 2;
+  const biomeY = 354;
+  const biomeOrder = ["desert", "jungle", "snow"];
+  const biomeEmoji = { desert: "🏜️", jungle: "🌴", snow: "❄️" };
+  const biomeRects = [];
+
+  for (const [i, key] of biomeOrder.entries()) {
+    const rect = { x: biomeStartX + i * (biomeBtnW + biomeGap), y: biomeY, w: biomeBtnW, h: biomeBtnH };
+    biomeRects.push({ rect, key });
+    const isActive = game.biome === key;
+    const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+    ctx.fillStyle = isActive ? "rgba(59, 130, 246, 0.32)"
+                              : (isHover ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)");
+    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 10);
+    ctx.fill();
+    ctx.strokeStyle = isActive ? COLORS.player : "rgba(255,255,255,0.15)";
+    ctx.lineWidth = isActive ? 2 : 1;
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.font = "22px -apple-system, sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.fillText(biomeEmoji[key], rect.x + rect.w / 2, rect.y + 22);
+    ctx.font = "bold 13px -apple-system, sans-serif";
+    ctx.fillText(BIOME_LABELS[key], rect.x + rect.w / 2, rect.y + 42);
   }
 
   // ── BOUTON JOUER ──
-  const playW = 280, playH = 64;
-  const playRect = { x: cx - playW / 2, y: 400, w: playW, h: playH };
+  const playW = 280, playH = 60;
+  const playRect = { x: cx - playW / 2, y: 432, w: playW, h: playH };
   const playHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, playRect);
 
   ctx.fillStyle = playHover ? COLORS.player : COLORS.playerDark;
@@ -3262,12 +3338,12 @@ function drawMenu(ctx) {
   ctx.font = "bold 14px -apple-system, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
-  ctx.fillText("PARAMÈTRES", cx, 510);
+  ctx.fillText("PARAMÈTRES", cx, 528);
 
-  const togW = 180, togH = 44, togGap = 16;
+  const togW = 180, togH = 40, togGap = 16;
   const totalTogW = 2 * togW + togGap;
   const togStartX = cx - totalTogW / 2;
-  const togY = 525;
+  const togY = 544;
   const musicRect = { x: togStartX, y: togY, w: togW, h: togH };
   const sfxRect = { x: togStartX + togW + togGap, y: togY, w: togW, h: togH };
   drawToggleButton(ctx, musicRect, "🎵 Musique", audio.musicEnabled);
@@ -3277,7 +3353,7 @@ function drawMenu(ctx) {
   ctx.fillStyle = COLORS.hudMuted;
   ctx.font = "11px -apple-system, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("Souris bord G/D pour scroller — ← → / A D — H / E pour recadrer — Échap pour annuler — 1-5 sélection bâtiment", cx, 600);
+  ctx.fillText("Souris bord G/D pour scroller — ← → / A D — H / E pour recadrer — Échap pour annuler — 1-5 sélection bâtiment", cx, 612);
 
   // ── BANDEAU AUTH / PROFIL (cliquable HTML hors canvas idéalement, ici on dessine et on intercepte les clics)
   const profile = window.RE_AUTH?.profile;
@@ -3285,14 +3361,14 @@ function drawMenu(ctx) {
   ctx.font = "13px -apple-system, sans-serif";
   ctx.textAlign = "center";
   if (profile) {
-    ctx.fillText(`👤 ${profile.username || "joueur"}  ·  💰 ${profile.currency} global  ·  équipe : ${window.RE_AUTH?.skin?.name || "bleu défaut"}`, cx, 632);
+    ctx.fillText(`👤 ${profile.username || "joueur"}  ·  💰 ${profile.currency} global  ·  équipe : ${window.RE_AUTH?.skin?.name || "bleu défaut"}`, cx, 640);
   } else {
     ctx.fillStyle = COLORS.hudMuted;
-    ctx.fillText("Tu joues en invité — connecte-toi pour gagner de la monnaie et débloquer des skins.", cx, 632);
+    ctx.fillText("Tu joues en invité — connecte-toi pour gagner de la monnaie et débloquer des skins.", cx, 640);
   }
 
   // Liens cliquables
-  const linkY = 660;
+  const linkY = 672;
   const linksData = profile
     ? [
         { label: "🛍️ Boutique", url: "/shop/" },
@@ -3337,7 +3413,7 @@ function drawMenu(ctx) {
   ctx.textBaseline = "alphabetic";
   ctx.fillText("github.com/GuestElite/robotic-emergence", cx, CONFIG.H - 12);
 
-  game.ui.menuRects = { diff: diffRects, play: playRect, music: musicRect, sfx: sfxRect, links: linkRects };
+  game.ui.menuRects = { diff: diffRects, biome: biomeRects, play: playRect, music: musicRect, sfx: sfxRect, links: linkRects };
 }
 
 function drawToggleButton(ctx, rect, label, on) {
@@ -4011,6 +4087,18 @@ function setupInput(canvas) {
           return;
         }
       }
+      // Biome
+      if (mr.biome) {
+        for (const b of mr.biome) {
+          if (pointInRect(sx, sy, b.rect)) {
+            if (b.key !== game.biome) {
+              audio.playSFX("click");
+              applyBiome(b.key).then(saveSettings);
+            }
+            return;
+          }
+        }
+      }
       // Toggle musique
       if (pointInRect(sx, sy, mr.music)) {
         audio.setMusicEnabled(!audio.musicEnabled);
@@ -4305,12 +4393,11 @@ function resetGame() {
   game.player = makeSideState("player");
   game.enemy = makeSideState("enemy");
   game.units = [];
-  game.props = PROP_POSITIONS.map((p) => ({
-    type: p.type,
-    x: p.x,
-    y: p.y,
-    def: PROP_TYPES[p.type],
-  }));
+  // Props : pour V1, uniquement en biome désert (jungle/snow auront leurs
+  // propres props plus tard, les cactus/rochers désert ne collent pas).
+  game.props = game.biome === "desert"
+    ? PROP_POSITIONS.map((p) => ({ type: p.type, x: p.x, y: p.y, def: PROP_TYPES[p.type] }))
+    : [];
   game.attackFx = [];
   game.explosions = [];
   game.lightning = null;
