@@ -523,6 +523,46 @@ const audio = {
   // ── Menu music — joué UNIQUEMENT sur l'écran menu, indépendant du BGM in-game.
   // 3 tracks au choix dans le dropdown du menu (top-left). Le user peut switcher
   // à la volée ; le choix est persisté en localStorage.
+  // Position de lecture aussi persistée (clé "menuMusicPos") pour assurer la
+  // continuité entre cette page canvas et les pages HTML (shop, profile, etc.).
+  _menuPosKey: "menuMusicPos",
+  _menuPosResumeWindowMs: 5000,
+  _saveMenuMusicPos() {
+    if (!this.menuMusic || this.menuMusic.paused) return;
+    try {
+      localStorage.setItem(this._menuPosKey, JSON.stringify({
+        trackId: this.menuMusic._trackId,
+        position: this.menuMusic.currentTime,
+        savedAt: Date.now(),
+      }));
+    } catch (_) {}
+  },
+  _loadMenuMusicPos(trackId) {
+    try {
+      const raw = localStorage.getItem(this._menuPosKey);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (data.trackId !== trackId) return null;
+      const elapsedMs = Date.now() - (data.savedAt || 0);
+      if (elapsedMs > this._menuPosResumeWindowMs) return null;
+      return Math.max(0, (data.position || 0) + elapsedMs / 1000);
+    } catch (_) { return null; }
+  },
+  _attachMenuMusicTracking(audioEl, trackId) {
+    // Restore position si savé récemment
+    const resumeAt = this._loadMenuMusicPos(trackId);
+    if (resumeAt !== null) {
+      audioEl.addEventListener("loadedmetadata", () => {
+        try {
+          const dur = audioEl.duration || 0;
+          audioEl.currentTime = dur > 0 ? (resumeAt % dur) : 0;
+        } catch (_) {}
+      }, { once: true });
+    }
+    // Save position périodiquement pendant la lecture (~4 Hz)
+    const saveBound = () => this._saveMenuMusicPos();
+    audioEl.addEventListener("timeupdate", saveBound);
+  },
   preloadMenuMusic() {
     if (this.menuMusic) return;
     const track = MENU_MUSIC_TRACKS.find((t) => t.id === this.menuMusicTrackId)
@@ -532,6 +572,7 @@ const audio = {
     this.menuMusic.preload = "auto";
     this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
     this.menuMusic._trackId = track.id;
+    this._attachMenuMusicTracking(this.menuMusic, track.id);
     try { this.menuMusic.load(); } catch (_) {}
   },
   startMenuMusic() {
@@ -544,10 +585,8 @@ const audio = {
   setMenuTrack(trackId) {
     const track = MENU_MUSIC_TRACKS.find((t) => t.id === trackId);
     if (!track) return;
-    // Si même track et déjà en cours, ne fais rien
     if (this.menuMusic && this.menuMusic._trackId === trackId && !this.menuMusic.paused) return;
     this.menuMusicTrackId = trackId;
-    // Détruit l'ancien audio (pause + reset) et crée le nouveau
     if (this.menuMusic) {
       try { this.menuMusic.pause(); } catch (_) {}
       this.menuMusic = null;
@@ -557,6 +596,7 @@ const audio = {
     this.menuMusic.preload = "auto";
     this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
     this.menuMusic._trackId = trackId;
+    this._attachMenuMusicTracking(this.menuMusic, trackId);
     if (this.musicEnabled && game.screen === "menu") {
       this.menuMusic.play().catch(() => {});
     }
@@ -9881,6 +9921,12 @@ async function boot() {
 
   // Précharge la menu music (le user peut la changer via le dropdown menu).
   audio.preloadMenuMusic();
+
+  // Flush la position de lecture avant de quitter la page → la prochaine
+  // page HTML (shop, profile…) reprendra à la même position.
+  const flushMenuPos = () => audio._saveMenuMusicPos();
+  window.addEventListener("pagehide", flushMenuPos);
+  window.addEventListener("beforeunload", flushMenuPos);
 
   // Démarre l'écran de menu (le gameplay s'init au clic sur Jouer)
   game.screen = "menu";
