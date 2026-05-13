@@ -2128,10 +2128,13 @@ function update(dt) {
   game.ui.mouse.x = game.ui.mouseScreen.x + game.camera.x;
   game.ui.mouse.y = game.ui.mouseScreen.y;
 
-  // MP host : broadcast un snapshot d'état à ~12 Hz
+  // MP host : broadcast un snapshot d'état à ~24 Hz (était 12 Hz auparavant).
+  // 24 Hz améliore notablement la fluidité côté guest (moins de "sauts" entre
+  // 2 snapshots) au prix d'un débit réseau doublé — toujours largement dans
+  // les limites de Supabase Realtime broadcast.
   if (game.mode === "mp" && game.mp?.role === "host" && window.RE_MP) {
     game.mp.snapAccum = (game.mp.snapAccum || 0) + dt;
-    if (game.mp.snapAccum >= (1 / 12)) {
+    if (game.mp.snapAccum >= (1 / 24)) {
       game.mp.snapAccum = 0;
       try { window.RE_MP.sendSnapshot(buildMpSnapshot()); } catch (e) { console.warn("[MP] snapshot send", e); }
     }
@@ -8047,6 +8050,17 @@ function buildMpSnapshot() {
       })),
     attackFx: game.attackFx.slice(-40).map((fx) => ({ ...fx })),
     explosions: game.explosions.slice(-12).map((ex) => ({ ...ex })),
+    // Blasters Star Wars : bolts en vol + muzzle/impact flashes. Snapshot
+    // récent uniquement (max 60 projectiles / 30 flashes) — au-delà c'est
+    // visuel mineur et coût réseau pas justifié.
+    projectiles: game.projectiles.slice(-60).map((p) => ({
+      startX: p.startX, startY: p.startY, endX: p.endX, endY: p.endY,
+      x: p.x, y: p.y, angle: p.angle,
+      age: p.age, ttl: p.ttl, profile: p.profile, side: p.side,
+    })),
+    flashes: game.flashes.slice(-30).map((f) => ({
+      x: f.x, y: f.y, age: f.age, ttl: f.ttl, kind: f.kind, side: f.side,
+    })),
     lightning: game.lightning ? { ...game.lightning, segments: game.lightning.segments?.slice() || [] } : null,
     iem: game.iem ? { ...game.iem } : null,
     cd: { player: game.lightningCooldown, enemy: game.mp?.enemyLightningCooldown || 0 },
@@ -8171,6 +8185,13 @@ function applyMpSnapshot(snap) {
   }
   game.attackFx = Array.isArray(snap.attackFx) ? snap.attackFx.map((fx) => ({ ...fx })) : [];
   game.explosions = Array.isArray(snap.explosions) ? snap.explosions.map((ex) => ({ ...ex })) : [];
+  // Blasters bolts + flashes — réinjectés côté guest pour qu'il voit les tirs.
+  game.projectiles = Array.isArray(snap.projectiles)
+    ? snap.projectiles.map((p) => ({ ...p }))
+    : [];
+  game.flashes = Array.isArray(snap.flashes)
+    ? snap.flashes.map((f) => ({ ...f }))
+    : [];
   game.lightning = snap.lightning ? { ...snap.lightning } : null;
   game.iem = snap.iem ? { ...snap.iem } : null;
   if (snap.cd) {
