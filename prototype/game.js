@@ -1714,10 +1714,26 @@ function applyPeerSkin(skin) {
 }
 
 function hexToRgba(hex, alpha) {
+  // Si on reçoit déjà une couleur rgba(...) ou hsla(...), on la passe-through
+  // en remplaçant l'alpha existant (best-effort).
+  if (typeof hex !== "string") return `rgba(255,255,255,${alpha})`;
+  if (hex.startsWith("rgba") || hex.startsWith("rgb")) {
+    return hex.replace(/[\d.]+\)$/, `${alpha})`);
+  }
+  if (hex.startsWith("hsla") || hex.startsWith("hsl")) {
+    return hex.replace(/[\d.]+\)$/, `${alpha})`);
+  }
   const h = hex.replace("#", "");
-  const r = parseInt(h.substring(0, 2), 16);
-  const g = parseInt(h.substring(2, 4), 16);
-  const b = parseInt(h.substring(4, 6), 16);
+  // Supporte les hex 3-char (e.g. #abc) en les dédoublant
+  const norm = h.length === 3
+    ? h.split("").map((c) => c + c).join("")
+    : h;
+  const r = parseInt(norm.substring(0, 2), 16);
+  const g = parseInt(norm.substring(2, 4), 16);
+  const b = parseInt(norm.substring(4, 6), 16);
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) {
+    return `rgba(255,255,255,${alpha})`;
+  }
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
@@ -6609,8 +6625,8 @@ function drawLobbyChoice(ctx) {
   const joinRect       = { x: leftX, y: startY + (btnH + gap) * 2, w: btnW, h: btnH };
 
   drawLobbyButton(ctx, createPubRect,  "✨  Créer un salon PUBLIC",   "Apparaît dans la liste à droite", COLORS.player, COLORS.playerDark);
-  drawLobbyButton(ctx, createPrivRect, "🔒  Créer un salon PRIVÉ",   "Seuls ceux qui ont le code rejoignent", "rgba(168,85,247,1)", "rgba(91,33,182,0.6)");
-  drawLobbyButton(ctx, joinRect,       "🔑  Rejoindre via code",     "Entre un code à 6 caractères",   COLORS.enemy, COLORS.enemyDark || "rgba(220,38,38,0.4)");
+  drawLobbyButton(ctx, createPrivRect, "🔒  Créer un salon PRIVÉ",   "Seuls ceux qui ont le code rejoignent", "#a855f7", "#5b21b6");
+  drawLobbyButton(ctx, joinRect,       "🔑  Rejoindre via code",     "Entre un code à 6 caractères",   COLORS.enemy, COLORS.enemyDark || "#7f1d1d");
 
   // Bouton retour menu
   const backW = 200, backH = 36;
