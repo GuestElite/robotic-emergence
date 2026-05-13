@@ -4022,17 +4022,18 @@ function drawMenu(ctx) {
   ctx.textBaseline = "middle";
   ctx.fillText("📘  Tutoriel (1ère partie)", tutoRect.x + tutoRect.w / 2, tutoRect.y + tutoRect.h / 2);
 
-  // ── SETTINGS AUDIO ──
+  // ── SETTINGS AUDIO ── (positions décalées vers le bas pour laisser
+  // la place au bouton Tutoriel inséré sous les boutons play)
   ctx.fillStyle = COLORS.hudText;
   ctx.font = "bold 14px -apple-system, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
-  ctx.fillText("PARAMÈTRES", cx, 528);
+  ctx.fillText("PARAMÈTRES", cx, 560);
 
   const togW = 180, togH = 40, togGap = 16;
   const totalTogW = 2 * togW + togGap;
   const togStartX = cx - totalTogW / 2;
-  const togY = 544;
+  const togY = 576;
   const musicRect = { x: togStartX, y: togY, w: togW, h: togH };
   const sfxRect = { x: togStartX + togW + togGap, y: togY, w: togW, h: togH };
   drawToggleButton(ctx, musicRect, "🎵 Musique", audio.musicEnabled);
@@ -4042,22 +4043,22 @@ function drawMenu(ctx) {
   ctx.fillStyle = COLORS.hudMuted;
   ctx.font = "11px -apple-system, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("Souris bord G/D pour scroller — ← → / A D — H / E pour recadrer — Échap pour annuler — 1-5 sélection bâtiment", cx, 612);
+  ctx.fillText("Souris bord G/D pour scroller — ← → / A D — H / E pour recadrer — Échap pour annuler — 1-5 sélection bâtiment", cx, 632);
 
-  // ── BANDEAU AUTH / PROFIL (cliquable HTML hors canvas idéalement, ici on dessine et on intercepte les clics)
+  // ── BANDEAU AUTH / PROFIL ──
   const profile = window.RE_AUTH?.profile;
   ctx.fillStyle = COLORS.hudText;
   ctx.font = "13px -apple-system, sans-serif";
   ctx.textAlign = "center";
   if (profile) {
-    ctx.fillText(`👤 ${profile.username || "joueur"}  ·  💰 ${profile.currency} global  ·  équipe : ${window.RE_AUTH?.skin?.name || "bleu défaut"}`, cx, 640);
+    ctx.fillText(`👤 ${profile.username || "joueur"}  ·  💰 ${profile.currency} global  ·  équipe : ${window.RE_AUTH?.skin?.name || "bleu défaut"}`, cx, 654);
   } else {
     ctx.fillStyle = COLORS.hudMuted;
-    ctx.fillText("Tu joues en invité — connecte-toi pour gagner de la monnaie et débloquer des skins.", cx, 640);
+    ctx.fillText("Tu joues en invité — connecte-toi pour gagner de la monnaie et débloquer des skins.", cx, 654);
   }
 
   // Liens cliquables
-  const linkY = 672;
+  const linkY = 686;
   const linksData = profile
     ? [
         { label: "🛍️ Boutique", url: "/shop/" },
