@@ -2708,8 +2708,64 @@ function render(ctx) {
   if (game.gameOver) drawGameOverOverlay(ctx);
 }
 
+// Boucle de simulation en arrière-plan (hors RAF) :
+// active uniquement quand la page est cachée ET qu'on est host MP en partie
+// active. Tick à 20 Hz, simule sans rendre. Le guest n'a pas besoin de ce
+// fallback : il reçoit ses snapshots via websocket Supabase (non throttle).
+let _bgSimTimer = null;
+let _bgSimLastTime = 0;
+
+function shouldRunBackgroundSim() {
+  return (
+    game.mode === "mp" &&
+    game.mp?.role === "host" &&
+    game.screen === "playing" &&
+    !game.gameOver
+  );
+}
+
+function startBackgroundSim() {
+  if (_bgSimTimer) return;
+  _bgSimLastTime = performance.now();
+  _bgSimTimer = setInterval(() => {
+    if (!document.hidden || !shouldRunBackgroundSim()) {
+      stopBackgroundSim();
+      return;
+    }
+    const now = performance.now();
+    let dt = (now - _bgSimLastTime) / 1000;
+    _bgSimLastTime = now;
+    if (dt > 0.1) dt = 0.1;
+    try { update(dt); } catch (e) { console.error("[bg update]", e); }
+  }, 50);
+}
+
+function stopBackgroundSim() {
+  if (_bgSimTimer) {
+    clearInterval(_bgSimTimer);
+    _bgSimTimer = null;
+  }
+}
+
+function setupBackgroundSimLoop() {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      if (shouldRunBackgroundSim()) startBackgroundSim();
+    } else {
+      stopBackgroundSim();
+      // Le RAF reprend ; on reset lastTimestamp pour que le 1er frame n'ait
+      // pas un dt énorme (cap déjà appliqué dans gameLoop mais double sécurité).
+      game.lastTimestamp = 0;
+    }
+  });
+}
+
 function gameLoop(timestamp) {
-  const dt = game.lastTimestamp ? (timestamp - game.lastTimestamp) / 1000 : 0;
+  // Si la simulation tourne en arrière-plan (page cachée), le RAF est gelé
+  // par le navigateur ; au retour, le 1er frame a un dt énorme qu'il ne faut
+  // pas appliquer (sinon saut de simulation). On cap à 0.1s.
+  let dt = game.lastTimestamp ? (timestamp - game.lastTimestamp) / 1000 : 0;
+  if (dt > 0.1) dt = 0.1;
   game.lastTimestamp = timestamp;
 
   const canvas = document.getElementById("game-canvas");
@@ -8928,6 +8984,12 @@ async function boot() {
   // Démarre l'écran de menu (le gameplay s'init au clic sur Jouer)
   game.screen = "menu";
   requestAnimationFrame(gameLoop);
+
+  // Fallback simulation hors-RAF quand la page est cachée (autre onglet,
+  // fenêtre minimisée). Sans ça, le host MP fige et bloque le guest.
+  // On simule à 20 Hz sans rendu — le rendu reprend dès que la page est
+  // visible (le RAF redémarre automatiquement).
+  setupBackgroundSimLoop();
 
   // ?invite=CODE → auto-flow vers le rejoindre MP avec le code prérempli
   try {
