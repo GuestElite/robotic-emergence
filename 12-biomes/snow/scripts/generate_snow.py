@@ -420,6 +420,152 @@ def render_factory_swarmer_snow():
     return drop_shadow(img, offset=(3, 4), blur=4, opacity=120)
 
 
+def render_unit_air_snow():
+    """Chasseur delta enemy en thème arctic (gunmetal + glow cyan glacé).
+    Orientation : pointe vers la droite (+X). game.js flippe pour enemy au runtime."""
+    W = H = 48
+    pal = ENEMY_SNOW
+    img, d = new_canvas(W, H)
+    cx, cy = W // 2, H // 2
+
+    # Ombre projetée au sol
+    shadow_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    sd_shadow = ImageDraw.Draw(shadow_layer, "RGBA")
+    sd_shadow.polygon(
+        [(cx + 22, cy + 5), (cx - 14, cy + 14), (cx - 14, cy - 4)],
+        fill=(0, 0, 0, 90),
+    )
+    shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(2))
+    img = Image.alpha_composite(img, shadow_layer)
+    d = ImageDraw.Draw(img, "RGBA")
+
+    # Aile delta swept-back
+    wing = [(cx + 20, cy), (cx - 16, cy - 14), (cx - 8, cy), (cx - 16, cy + 14)]
+    d.polygon(wing, fill=pal["base"], outline=ACCENT["outline"])
+    d.line((cx + 20, cy, cx - 16, cy - 14), fill=pal["light"], width=1)
+
+    # Fuselage central effilé
+    d.polygon(
+        [(cx + 18, cy - 1), (cx + 18, cy + 1),
+         (cx - 12, cy + 4), (cx - 12, cy - 4)],
+        fill=pal["dark"], outline=ACCENT["outline"],
+    )
+
+    # Cockpit glow cyan glacé
+    d.ellipse((cx + 4, cy - 3, cx + 14, cy + 3),
+              fill=pal["glow"], outline=ACCENT["outline"])
+    d.ellipse((cx + 6, cy - 2, cx + 9, cy), fill=ACCENT["white"])
+
+    # Missiles sous les ailes (avec pointe glow cyan)
+    d.rectangle((cx - 4, cy - 10, cx + 8, cy - 8),
+                fill=METAL["darkest"], outline=ACCENT["outline"])
+    d.rectangle((cx + 6, cy - 10, cx + 8, cy - 8), fill=pal["glow"])
+    d.rectangle((cx - 4, cy + 8, cx + 8, cy + 10),
+                fill=METAL["darkest"], outline=ACCENT["outline"])
+    d.rectangle((cx + 6, cy + 8, cx + 8, cy + 10), fill=pal["glow"])
+
+    # Réacteurs arrière (flamme cyan)
+    d.rectangle((cx - 16, cy - 6, cx - 10, cy - 2),
+                fill=METAL["dark"], outline=ACCENT["outline"])
+    d.rectangle((cx - 17, cy - 5, cx - 16, cy - 3), fill=pal["glow"])
+    d.rectangle((cx - 16, cy + 2, cx - 10, cy + 6),
+                fill=METAL["dark"], outline=ACCENT["outline"])
+    d.rectangle((cx - 17, cy + 3, cx - 16, cy + 5), fill=pal["glow"])
+
+    # Empennage stabilisateur
+    d.polygon([(cx - 10, cy - 1), (cx - 10, cy + 1), (cx - 14, cy)],
+              fill=METAL["light"])
+
+    return drop_shadow(img, offset=(1, 2), blur=2, opacity=90)
+
+
+def render_factory_air_snow():
+    """Hangar à toit ouvert enemy en thème arctic. Sprite dessiné en orientation
+    'player' puis flippé verticalement → toit ouvre vers le sud."""
+    W = H = 128
+    pal = ENEMY_SNOW
+    img, d = new_canvas(W, H)
+
+    d.rounded_rectangle((6, 8, W - 6, H - 6), radius=10,
+                        fill=METAL["darkest"], outline=ACCENT["outline"], width=1)
+
+    sub_img, sd = new_canvas(W, H)
+
+    # Corps principal (gunmetal)
+    body = (12, 14, W - 12, H - 12)
+    shaded_rect_3d(sd, body, pal_dark=METAL["darkest"], pal_base=pal["base"],
+                   pal_light=pal["light"], radius=6)
+    rivets(sd, body, METAL["darkest"], spacing=18)
+
+    # Ouverture centrale
+    opening = (32, 20, W - 32, 70)
+    sd.rectangle(opening, fill=METAL["darkest"])
+    sd.rectangle((opening[0], opening[1], opening[2], opening[1] + 2),
+                 fill=ACCENT["outline"])
+
+    # Toits ouverts (trapèzes inclinés)
+    left_roof = [(32, 20), (32, 70), (14, 60), (14, 28)]
+    sd.polygon(left_roof, fill=METAL["dark"], outline=ACCENT["outline"])
+    sd.line((14, 28, 32, 20), fill=METAL["light"], width=1)
+    sd.ellipse((12, 32, 16, 36), fill=METAL["light"], outline=ACCENT["outline"])
+    sd.ellipse((12, 56, 16, 60), fill=METAL["light"], outline=ACCENT["outline"])
+
+    right_roof = [(W - 32, 20), (W - 32, 70), (W - 14, 60), (W - 14, 28)]
+    sd.polygon(right_roof, fill=METAL["dark"], outline=ACCENT["outline"])
+    sd.line((W - 14, 28, W - 32, 20), fill=METAL["light"], width=1)
+    sd.ellipse((W - 16, 32, W - 12, 36), fill=METAL["light"], outline=ACCENT["outline"])
+    sd.ellipse((W - 16, 56, W - 12, 60), fill=METAL["light"], outline=ACCENT["outline"])
+
+    # Rampe de lancement (gunmetal sombre + rayures cyan)
+    ramp = [(38, 68), (W - 38, 68), (W - 50, 24), (50, 24)]
+    sd.polygon(ramp, fill=pal["dark"], outline=ACCENT["outline"])
+    for y_off, x_shrink in ((32, 1), (42, 3), (52, 5), (62, 7)):
+        sd.line((50 + x_shrink, y_off, W - 50 - x_shrink, y_off),
+                fill=pal["glow"], width=1)
+
+    # Mini drone delta sur la rampe (pointe vers le haut)
+    cx_d, cy_d = W // 2, 44
+    sd.polygon([(cx_d, cy_d - 14), (cx_d - 14, cy_d + 10), (cx_d + 14, cy_d + 10)],
+               fill=pal["light"], outline=ACCENT["outline"])
+    sd.polygon([(cx_d, cy_d - 12), (cx_d - 4, cy_d + 10), (cx_d + 4, cy_d + 10)],
+               fill=pal["base"])
+    sd.ellipse((cx_d - 3, cy_d - 5, cx_d + 3, cy_d + 1), fill=pal["glow"])
+    sd.ellipse((cx_d - 1, cy_d - 4, cx_d + 1, cy_d - 2), fill=ACCENT["white"])
+    sd.rectangle((cx_d - 10, cy_d, cx_d - 7, cy_d + 7), fill=METAL["darkest"])
+    sd.rectangle((cx_d + 7, cy_d, cx_d + 10, cy_d + 7), fill=METAL["darkest"])
+    sd.rectangle((cx_d - 10, cy_d, cx_d - 7, cy_d + 2), fill=pal["glow"])
+    sd.rectangle((cx_d + 7, cy_d, cx_d + 10, cy_d + 2), fill=pal["glow"])
+
+    # Marqueur H façon héliport
+    cx_h, cy_h = W // 2, 96
+    sd.rectangle((cx_h - 14, cy_h - 9, cx_h + 14, cy_h + 9),
+                 fill=pal["dark"], outline=ACCENT["outline"])
+    sd.rectangle((cx_h - 10, cy_h - 6, cx_h - 6, cy_h + 6), fill=pal["glow"])
+    sd.rectangle((cx_h + 6, cy_h - 6, cx_h + 10, cy_h + 6), fill=pal["glow"])
+    sd.rectangle((cx_h - 10, cy_h - 2, cx_h + 10, cy_h + 2), fill=pal["glow"])
+
+    # Antennes
+    antenna_3d(sd, 22, 80, 14, pal["glow"])
+    antenna_3d(sd, W - 22, 80, 14, pal["glow"])
+
+    # Lumières de balisage (cyan glacé pour cohérence biome)
+    for cx, cy in [(20, 90), (W - 20, 90), (34, 16), (W - 34, 16)]:
+        sd.ellipse((cx - 2, cy - 2, cx + 2, cy + 2),
+                   fill=pal["glow"], outline=ACCENT["outline"])
+
+    # Porte arrière de service
+    gate_w = 22
+    sd.rectangle((W // 2 - gate_w // 2, H - 14, W // 2 + gate_w // 2, H - 6),
+                 fill=METAL["darkest"], outline=ACCENT["outline"])
+    sd.rectangle((W // 2 - gate_w // 2 + 3, H - 12, W // 2 + gate_w // 2 - 3, H - 8),
+                 fill=pal["glow"])
+
+    # Flip vertical → orientation enemy
+    sub_img = sub_img.transpose(Image.FLIP_TOP_BOTTOM)
+    img = Image.alpha_composite(img, sub_img)
+    return drop_shadow(img, offset=(3, 4), blur=4, opacity=120)
+
+
 def render_factory_sniper_snow():
     W = H = 128
     pal = ENEMY_SNOW
@@ -670,10 +816,12 @@ def main():
         ("unit-heavy-enemy.png",       render_unit_heavy_snow),
         ("unit-swarmer-enemy.png",     render_unit_swarmer_snow),
         ("unit-sniper-enemy.png",      render_unit_sniper_snow),
+        ("unit-air-enemy.png",         render_unit_air_snow),
         ("factory-light-enemy.png",    render_factory_light_snow),
         ("factory-heavy-enemy.png",    render_factory_heavy_snow),
         ("factory-swarmer-enemy.png",  render_factory_swarmer_snow),
         ("factory-sniper-enemy.png",   render_factory_sniper_snow),
+        ("factory-air-enemy.png",      render_factory_air_snow),
     ]
 
     for name, fn in to_render:

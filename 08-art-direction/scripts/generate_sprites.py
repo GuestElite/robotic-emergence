@@ -287,6 +287,205 @@ def render_unit_heavy(side: str) -> Image.Image:
 
 
 # ===========================================================================
+# 5b. FACTORY AIR — 128x128, hangar industriel à toit ouvert
+# ===========================================================================
+# Signature : toit en V ouvert au centre, révélant une rampe de lancement et
+# un mini drone delta posé dessus. Orientation explicite par côté :
+#   - player : toit ouvert vers le HAUT (drone décolle vers la base ennemie)
+#   - enemy  : toit ouvert vers le BAS  (drone décolle vers la base joueur)
+
+def render_factory_air(side: str) -> Image.Image:
+    W = H = 128
+    pal = side_palette(side)
+    img, d = new_canvas(W, H)
+
+    # Plateforme/socle au sol (symétrique → pas affectée par le flip vertical)
+    d.rounded_rectangle((6, 8, W - 6, H - 6), radius=10,
+                        fill=METAL["darkest"], outline=ACCENT["outline"], width=1)
+
+    # Tout le reste est dessiné en orientation "player" puis flippé pour enemy.
+    sub_img, sd = new_canvas(W, H)
+
+    # === Corps principal du hangar (couvre tout le sprite) ===
+    body = (12, 14, W - 12, H - 12)
+    rounded_rect_with_shading(sd, body,
+                              color_base=pal["base"], color_dark=METAL["darkest"],
+                              color_light=pal["light"], radius=6,
+                              outline=ACCENT["outline"])
+    rivets(sd, body, METAL["darkest"], spacing=18)
+
+    # === Ouverture centrale (intérieur sombre du hangar, toit ouvert) ===
+    opening = (32, 20, W - 32, 70)
+    sd.rectangle(opening, fill=METAL["darkest"])
+    # Petit liseré sombre supérieur pour donner de la profondeur
+    sd.rectangle((opening[0], opening[1], opening[2], opening[1] + 2),
+                 fill=ACCENT["outline"])
+
+    # === 2 toits ouverts (trapèzes inclinés vers l'extérieur — comme des portes pliantes) ===
+    # Trapèze gauche
+    left_roof = [
+        (32, 20),     # charnière haut intérieure
+        (32, 70),     # charnière bas intérieure
+        (14, 60),     # appui externe bas
+        (14, 28),     # appui externe haut
+    ]
+    sd.polygon(left_roof, fill=METAL["dark"], outline=ACCENT["outline"])
+    sd.line((14, 28, 32, 20), fill=METAL["highlight"], width=1)
+    sd.ellipse((12, 32, 16, 36), fill=METAL["light"], outline=ACCENT["outline"])
+    sd.ellipse((12, 56, 16, 60), fill=METAL["light"], outline=ACCENT["outline"])
+
+    # Trapèze droit (miroir)
+    right_roof = [
+        (W - 32, 20),
+        (W - 32, 70),
+        (W - 14, 60),
+        (W - 14, 28),
+    ]
+    sd.polygon(right_roof, fill=METAL["dark"], outline=ACCENT["outline"])
+    sd.line((W - 14, 28, W - 32, 20), fill=METAL["highlight"], width=1)
+    sd.ellipse((W - 16, 32, W - 12, 36), fill=METAL["light"], outline=ACCENT["outline"])
+    sd.ellipse((W - 16, 56, W - 12, 60), fill=METAL["light"], outline=ACCENT["outline"])
+
+    # === Rampe de lancement colorée (trapèze qui pointe vers le haut) ===
+    ramp = [
+        (38, 68),
+        (W - 38, 68),
+        (W - 50, 24),
+        (50, 24),
+    ]
+    sd.polygon(ramp, fill=pal["dark"], outline=ACCENT["outline"])
+    # Rayures glow de guidage (suggèrent le mouvement vers le haut)
+    for y_off, x_shrink in ((32, 1), (42, 3), (52, 5), (62, 7)):
+        sd.line((50 + x_shrink, y_off, W - 50 - x_shrink, y_off),
+                fill=pal["glow"], width=1)
+
+    # === Mini drone delta posé sur la rampe (pointe vers le haut) ===
+    cx_d = W // 2
+    cy_d = 44
+    # Aile delta principale
+    sd.polygon([(cx_d, cy_d - 14), (cx_d - 14, cy_d + 10), (cx_d + 14, cy_d + 10)],
+               fill=pal["light"], outline=ACCENT["outline"])
+    # Fuselage central
+    sd.polygon([(cx_d, cy_d - 12), (cx_d - 4, cy_d + 10), (cx_d + 4, cy_d + 10)],
+               fill=pal["base"])
+    # Cockpit (glow)
+    sd.ellipse((cx_d - 3, cy_d - 5, cx_d + 3, cy_d + 1), fill=pal["glow"])
+    sd.ellipse((cx_d - 1, cy_d - 4, cx_d + 1, cy_d - 2), fill=ACCENT["white"])
+    # Missiles sous les ailes
+    sd.rectangle((cx_d - 10, cy_d, cx_d - 7, cy_d + 7), fill=METAL["darkest"])
+    sd.rectangle((cx_d + 7, cy_d, cx_d + 10, cy_d + 7), fill=METAL["darkest"])
+    sd.rectangle((cx_d - 10, cy_d, cx_d - 7, cy_d + 2), fill=ACCENT["warning"])
+    sd.rectangle((cx_d + 7, cy_d, cx_d + 10, cy_d + 2), fill=ACCENT["warning"])
+
+    # === Marqueur "H" façon héliport (lisibilité immédiate du rôle aérien) ===
+    cx_h = W // 2
+    cy_h = 96
+    sd.rectangle((cx_h - 14, cy_h - 9, cx_h + 14, cy_h + 9),
+                 fill=pal["dark"], outline=ACCENT["outline"])
+    # Lettre H stylisée (2 barres verticales + 1 horizontale)
+    sd.rectangle((cx_h - 10, cy_h - 6, cx_h - 6, cy_h + 6), fill=pal["glow"])
+    sd.rectangle((cx_h + 6, cy_h - 6, cx_h + 10, cy_h + 6), fill=pal["glow"])
+    sd.rectangle((cx_h - 10, cy_h - 2, cx_h + 10, cy_h + 2), fill=pal["glow"])
+
+    # === Antennes / tour de contrôle (coins du corps, sous l'ouverture) ===
+    antenna(sd, 22, 80, 14, pal["glow"])
+    antenna(sd, W - 22, 80, 14, pal["glow"])
+
+    # === Lumières de balisage clignotantes (4 voyants jaunes) ===
+    for cx, cy in [(20, 90), (W - 20, 90), (34, 16), (W - 34, 16)]:
+        sd.ellipse((cx - 2, cy - 2, cx + 2, cy + 2),
+                   fill=ACCENT["warning"], outline=ACCENT["outline"])
+
+    # === Porte arrière de service (sortie standard pour le routing du jeu) ===
+    gate_w = 22
+    sd.rectangle((W // 2 - gate_w // 2, H - 14, W // 2 + gate_w // 2, H - 6),
+                 fill=METAL["darkest"], outline=ACCENT["outline"])
+    sd.rectangle((W // 2 - gate_w // 2 + 3, H - 12, W // 2 + gate_w // 2 - 3, H - 8),
+                 fill=pal["glow"])
+
+    # === Flip vertical pour enemy (toit ouvert pointe vers le sud) ===
+    if side == "enemy":
+        sub_img = sub_img.transpose(Image.FLIP_TOP_BOTTOM)
+    img = Image.alpha_composite(img, sub_img)
+    return drop_shadow(img, offset=(2, 3), blur=4, opacity=110)
+
+
+# ===========================================================================
+# 5c. UNIT AIR — 48x48, chasseur delta stylisé top-down
+# ===========================================================================
+# Orientation : pointe vers la DROITE (+X). Le code de game.js flippe
+# horizontalement pour les enemy. On dessine donc toujours côté player.
+
+def render_unit_air(side: str) -> Image.Image:
+    W = H = 48
+    pal = side_palette(side)
+    img, d = new_canvas(W, H)
+
+    cx, cy = W // 2, H // 2
+
+    # === Ombre projetée au sol (décalée en bas-droite, plate, floue) ===
+    # Donne l'illusion que le chasseur survole le sol.
+    shadow_layer = Image.new("RGBA", (W, H), TRANSPARENT)
+    sd_shadow = ImageDraw.Draw(shadow_layer, "RGBA")
+    sd_shadow.polygon(
+        [(cx + 22, cy + 5), (cx - 14, cy + 14), (cx - 14, cy - 4)],
+        fill=(0, 0, 0, 90),
+    )
+    shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(2))
+    img = Image.alpha_composite(img, shadow_layer)
+    d = ImageDraw.Draw(img, "RGBA")
+
+    # === Aile delta (triangle large, pointe vers la droite, swept-back) ===
+    wing = [
+        (cx + 20, cy),           # pointe avant
+        (cx - 16, cy - 14),      # arrière-gauche-haut
+        (cx - 8, cy),            # creux arrière central
+        (cx - 16, cy + 14),      # arrière-gauche-bas
+    ]
+    d.polygon(wing, fill=pal["base"], outline=ACCENT["outline"])
+
+    # === Highlight sur le bord d'attaque supérieur (suggère l'éclairage) ===
+    d.line((cx + 20, cy, cx - 16, cy - 14), fill=pal["light"], width=1)
+
+    # === Fuselage central (rectangle effilé sur l'axe) ===
+    d.polygon(
+        [(cx + 18, cy - 1), (cx + 18, cy + 1),
+         (cx - 12, cy + 4), (cx - 12, cy - 4)],
+        fill=pal["dark"], outline=ACCENT["outline"],
+    )
+
+    # === Cockpit / canopée (ovale glow vers l'avant du fuselage) ===
+    d.ellipse((cx + 4, cy - 3, cx + 14, cy + 3),
+              fill=pal["glow"], outline=ACCENT["outline"])
+    # Reflet sur la canopée
+    d.ellipse((cx + 6, cy - 2, cx + 9, cy), fill=ACCENT["white"])
+
+    # === Missiles sous les ailes (2 rectangles fins métal) ===
+    d.rectangle((cx - 4, cy - 10, cx + 8, cy - 8),
+                fill=METAL["darkest"], outline=ACCENT["outline"])
+    d.rectangle((cx + 6, cy - 10, cx + 8, cy - 8), fill=ACCENT["warning"])
+    d.rectangle((cx - 4, cy + 8, cx + 8, cy + 10),
+                fill=METAL["darkest"], outline=ACCENT["outline"])
+    d.rectangle((cx + 6, cy + 8, cx + 8, cy + 10), fill=ACCENT["warning"])
+
+    # === Réacteurs arrière (2 cylindres + flamme glow) ===
+    # Réacteur supérieur
+    d.rectangle((cx - 16, cy - 6, cx - 10, cy - 2),
+                fill=METAL["dark"], outline=ACCENT["outline"])
+    d.rectangle((cx - 17, cy - 5, cx - 16, cy - 3), fill=pal["glow"])
+    # Réacteur inférieur
+    d.rectangle((cx - 16, cy + 2, cx - 10, cy + 6),
+                fill=METAL["dark"], outline=ACCENT["outline"])
+    d.rectangle((cx - 17, cy + 3, cx - 16, cy + 5), fill=pal["glow"])
+
+    # === Empennage stabilisateur arrière (petit triangle vertical au centre) ===
+    d.polygon([(cx - 10, cy - 1), (cx - 10, cy + 1), (cx - 14, cy)],
+              fill=METAL["light"])
+
+    return drop_shadow(img, offset=(1, 2), blur=2, opacity=90)
+
+
+# ===========================================================================
 # 6. TILE GROUND — 128x128, sable craquelé tileable
 # ===========================================================================
 
@@ -419,6 +618,10 @@ SPRITES = [
     ("unit-light-enemy.png",     render_unit_light,     ("enemy",)),
     ("unit-heavy-player.png",    render_unit_heavy,     ("player",)),
     ("unit-heavy-enemy.png",     render_unit_heavy,     ("enemy",)),
+    ("factory-air-player.png",   render_factory_air,    ("player",)),
+    ("factory-air-enemy.png",    render_factory_air,    ("enemy",)),
+    ("unit-air-player.png",      render_unit_air,       ("player",)),
+    ("unit-air-enemy.png",       render_unit_air,       ("enemy",)),
     ("tile-wall.png",            render_tile_wall,      ()),
     ("effect-explosion.png",     render_effect_explosion, ()),
     ("effect-laser.png",         render_effect_laser,   ()),
