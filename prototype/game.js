@@ -293,12 +293,14 @@ const audio = {
   ctx: null,
   musicEnabled: true,
   sfxEnabled: true,
-  musicMaster: null,   // GainNode pour la musique synth (fallback uniquement)
-  musicNodes: [],      // oscillators du fallback synth
-  bgmAudio: null,      // HTMLAudioElement pour la BGM Pathfinder
-  bgmVolume: 0.22,
-  wavBuffers: {},      // cache AudioBuffer par type
-  lastSfxTime: {},     // throttle par type de SFX
+  musicVolume: 0.8,    // 0..1 user-facing, multiplie bgmVolume (BGM HTMLAudio) ou musicMaster (synth fallback)
+  sfxVolume: 0.8,      // 0..1 user-facing, multiplie tous les gains de SFX
+  musicMaster: null,
+  musicNodes: [],
+  bgmAudio: null,
+  bgmVolume: 0.22,     // référence interne (mixée avec musicVolume)
+  wavBuffers: {},
+  lastSfxTime: {},
   async preloadWavs() {
     const ctx = this.ensureCtx();
     if (!ctx) return;
@@ -346,7 +348,8 @@ const audio = {
         const src = ctx.createBufferSource();
         src.buffer = buf;
         const g = ctx.createGain();
-        g.gain.value = SFX_WAV_VOLUMES[type] != null ? SFX_WAV_VOLUMES[type] : 0.4;
+        const baseVol = SFX_WAV_VOLUMES[type] != null ? SFX_WAV_VOLUMES[type] : 0.4;
+        g.gain.value = baseVol * this.sfxVolume;
         src.connect(g).connect(ctx.destination);
         src.start(0);
       } catch (_) {}
@@ -356,7 +359,9 @@ const audio = {
     // 2) Sinon → fallback oscillator (sons UI comme "click", "place", "upgrade", etc.)
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.connect(gain).connect(ctx.destination);
+    const volGain = ctx.createGain();
+    volGain.gain.setValueAtTime(this.sfxVolume, now);
+    osc.connect(gain).connect(volGain).connect(ctx.destination);
 
     switch (type) {
       case "shot": {
@@ -440,15 +445,12 @@ const audio = {
   startMusic() {
     if (!this.musicEnabled) return;
     if (this.bgmAudio && !this.bgmAudio.paused) return;
-    // BGM = "Pathfinder" par Scott Buckley (CC-BY 4.0)
     if (!this.bgmAudio) {
       this.bgmAudio = new Audio("../11-sound-design/music/bgm-pathfinder.mp3");
       this.bgmAudio.loop = true;
-      this.bgmAudio.volume = this.bgmVolume;
     }
-    this.bgmAudio.play().catch(() => {
-      // Autoplay bloqué → ressayera après la prochaine interaction
-    });
+    this.bgmAudio.volume = this.bgmVolume * this.musicVolume;
+    this.bgmAudio.play().catch(() => {});
   },
   stopMusic() {
     if (this.bgmAudio) {
@@ -461,6 +463,11 @@ const audio = {
     else this.stopMusic();
   },
   setSfxEnabled(on) { this.sfxEnabled = on; },
+  setMusicVolume(v) {
+    this.musicVolume = Math.max(0, Math.min(1, v));
+    if (this.bgmAudio) this.bgmAudio.volume = this.bgmVolume * this.musicVolume;
+  },
+  setSfxVolume(v) { this.sfxVolume = Math.max(0, Math.min(1, v)); },
 };
 
 // -------------------------------------------------------------
@@ -479,6 +486,8 @@ function loadSettings() {
     }
     if (typeof s.musicEnabled === "boolean") audio.musicEnabled = s.musicEnabled;
     if (typeof s.sfxEnabled === "boolean") audio.sfxEnabled = s.sfxEnabled;
+    if (typeof s.musicVolume === "number") audio.musicVolume = Math.max(0, Math.min(1, s.musicVolume));
+    if (typeof s.sfxVolume === "number") audio.sfxVolume = Math.max(0, Math.min(1, s.sfxVolume));
   } catch (_) {}
 }
 
@@ -488,6 +497,8 @@ function saveSettings() {
       difficulty: game.difficulty,
       musicEnabled: audio.musicEnabled,
       sfxEnabled: audio.sfxEnabled,
+      musicVolume: audio.musicVolume,
+      sfxVolume: audio.sfxVolume,
     }));
   } catch (_) {}
 }
@@ -525,7 +536,11 @@ const game = {
     panelRects: null,
     menuRects: null,
     gameOverMenuBtn: null,
-    lightningBtn: null,           // rect du bouton Éclair en HUD
+    lightningBtn: null,
+    settingsBtn: null,
+    settingsOpen: false,
+    settingsRects: null,
+    draggingSlider: null,         // "music" | "sfx" pendant un drag de volume
   },
 };
 
@@ -1407,7 +1422,7 @@ function updateCamera(dt) {
   const panelGeo = game.ui.upgradePanel ? getPanelGeometry() : null;
   const overPanel = panelGeo && pointInRect(sx, sy, panelGeo);
   const overGameOver = !!game.gameOver;
-  if (!game.ui.mouseInside || overHud || overPanel || overGameOver) return;
+  if (!game.ui.mouseInside || overHud || overPanel || overGameOver || game.ui.settingsOpen) return;
 
   if (sx >= 0 && sx < margin) {
     const intensity = 1 - sx / margin;
@@ -1448,6 +1463,7 @@ function render(ctx) {
   drawMinimap(ctx);
   drawScrollHints(ctx);
   drawUpgradePanel(ctx);
+  drawSettingsPanel(ctx);
   if (game.gameOver) drawGameOverOverlay(ctx);
 }
 
@@ -3196,6 +3212,7 @@ function drawHUD(ctx) {
   // Boutons "Construire" (mode build) + bouton spécial éclair
   drawBuildButtons(ctx);
   drawLightningButton(ctx);
+  drawSettingsButton(ctx);
 
   // Argent ennemi (droite)
   ctx.fillStyle = COLORS.enemy;
@@ -3267,6 +3284,161 @@ function drawBuildButtons(ctx) {
     ctx.font = "bold 12px -apple-system, sans-serif";
     ctx.fillText(`${cost}💰`, btn.x + btn.w / 2 + 34, btn.y + btn.h / 2);
   }
+}
+
+function drawSettingsButton(ctx) {
+  const btnX = 130 + 5 * (116 + 4) + 12 + 110 + 10;
+  const btnY = 12;
+  const btnW = 36;
+  const btnH = 36;
+  game.ui.settingsBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
+  const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, game.ui.settingsBtn);
+
+  ctx.fillStyle = isHover ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)";
+  roundedRect(ctx, btnX, btnY, btnW, btnH, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  const cx = btnX + btnW / 2;
+  const cy = btnY + btnH / 2;
+  ctx.strokeStyle = isHover ? "#fff" : "#cbd5e1";
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * 6, cy + Math.sin(a) * 6);
+    ctx.lineTo(cx + Math.cos(a) * 10, cy + Math.sin(a) * 10);
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = isHover ? "#fff" : "#cbd5e1";
+  ctx.beginPath();
+  ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawSettingsPanel(ctx) {
+  if (!game.ui.settingsOpen) { game.ui.settingsRects = null; return; }
+
+  const PW = 360;
+  const PH = 280;
+  const px = (CONFIG.CANVAS_W - PW) / 2;
+  const py = (CONFIG.H - PH) / 2;
+
+  ctx.fillStyle = "rgba(0,0,0,0.6)";
+  ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.6)";
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = "rgba(15, 20, 25, 0.97)";
+  roundedRect(ctx, px, py, PW, PH, 12);
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = COLORS.player;
+  ctx.lineWidth = 2;
+  roundedRect(ctx, px, py, PW, PH, 12);
+  ctx.stroke();
+
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 17px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("Paramètres audio", px + PW / 2, py + 16);
+
+  const closeRect = { x: px + PW - 32, y: py + 10, w: 24, h: 24 };
+  const closeHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, closeRect);
+  ctx.fillStyle = closeHover ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.08)";
+  roundedRect(ctx, closeRect.x, closeRect.y, closeRect.w, closeRect.h, 5);
+  ctx.fill();
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "bold 16px -apple-system, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText("×", closeRect.x + closeRect.w / 2, closeRect.y + closeRect.h / 2);
+
+  // Music
+  let yy = py + 64;
+  const musicToggle = { x: px + 24, y: yy, w: 100, h: 36 };
+  drawAudioToggle(ctx, musicToggle, "🎵 Musique", audio.musicEnabled);
+  const musicSlider = drawAudioSlider(ctx, px + 140, yy + 8, 180, audio.musicVolume, audio.musicEnabled);
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "11px -apple-system, sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillText(`${Math.round(audio.musicVolume * 100)}%`, px + PW - 24, yy + 38);
+
+  // SFX
+  yy = py + 130;
+  const sfxToggle = { x: px + 24, y: yy, w: 100, h: 36 };
+  drawAudioToggle(ctx, sfxToggle, "🔊 Effets", audio.sfxEnabled);
+  const sfxSlider = drawAudioSlider(ctx, px + 140, yy + 8, 180, audio.sfxVolume, audio.sfxEnabled);
+  ctx.fillStyle = COLORS.hudText;
+  ctx.font = "11px -apple-system, sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillText(`${Math.round(audio.sfxVolume * 100)}%`, px + PW - 24, yy + 38);
+
+  ctx.fillStyle = COLORS.hudMuted;
+  ctx.font = "11px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("Échap pour fermer · clique ou glisse le curseur du volume", px + PW / 2, py + PH - 14);
+
+  game.ui.settingsRects = {
+    panel: { x: px, y: py, w: PW, h: PH },
+    close: closeRect,
+    musicToggle, sfxToggle,
+    musicSlider, sfxSlider,
+  };
+}
+
+function drawAudioToggle(ctx, rect, label, on) {
+  const isHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, rect);
+  ctx.fillStyle = on
+    ? (isHover ? "rgba(34, 197, 94, 0.45)" : "rgba(34, 197, 94, 0.30)")
+    : (isHover ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.22)");
+  roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, 6);
+  ctx.fill();
+  ctx.strokeStyle = on ? COLORS.hpGood : COLORS.enemy;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 12px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+}
+
+function drawAudioSlider(ctx, x, y, width, value, enabled) {
+  const trackH = 8;
+  const knobR = 8;
+  const trackY = y + 10;
+  ctx.fillStyle = enabled ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.06)";
+  roundedRect(ctx, x, trackY, width, trackH, 4);
+  ctx.fill();
+  const fillW = width * value;
+  ctx.fillStyle = enabled ? COLORS.player : "rgba(100,116,139,0.45)";
+  roundedRect(ctx, x, trackY, fillW, trackH, 4);
+  ctx.fill();
+  const knobX = x + fillW;
+  const knobY = trackY + trackH / 2;
+  ctx.fillStyle = enabled ? "#fff" : "rgba(255,255,255,0.4)";
+  ctx.beginPath();
+  ctx.arc(knobX, knobY, knobR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = enabled ? COLORS.player : "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.25)";
+  for (const t of [0.25, 0.5, 0.75]) {
+    const tx = x + width * t;
+    ctx.fillRect(tx - 0.5, trackY - 2, 1, trackH + 4);
+  }
+  return { x, y: trackY - 6, w: width, h: trackH + 12 };
 }
 
 function drawLightningButton(ctx) {
@@ -3370,6 +3542,22 @@ function setupInput(canvas) {
   canvas.addEventListener("mouseleave", () => {
     game.ui.mouseInside = false;
     game.ui.hoverSlot = null;
+    game.ui.draggingSlider = null;
+  });
+
+  canvas.addEventListener("mousedown", (evt) => {
+    if (!game.ui.settingsOpen || !game.ui.settingsRects) return;
+    const { x, y } = canvasCoordsFromEvent(canvas, evt);
+    const sr = game.ui.settingsRects;
+    if (pointInRect(x, y, sr.musicSlider)) game.ui.draggingSlider = "music";
+    else if (pointInRect(x, y, sr.sfxSlider)) game.ui.draggingSlider = "sfx";
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (game.ui.draggingSlider) {
+      saveSettings();
+      game.ui.draggingSlider = null;
+    }
   });
 
   canvas.addEventListener("mousemove", (evt) => {
@@ -3377,6 +3565,15 @@ function setupInput(canvas) {
     game.ui.mouseScreen.x = x;
     game.ui.mouseScreen.y = y;
     game.ui.mouseInside = true;
+
+    // Drag actif → met à jour le volume en live
+    if (game.ui.draggingSlider && game.ui.settingsRects) {
+      const sr = game.ui.settingsRects;
+      const slider = game.ui.draggingSlider === "music" ? sr.musicSlider : sr.sfxSlider;
+      const v = Math.max(0, Math.min(1, (x - slider.x) / slider.w));
+      if (game.ui.draggingSlider === "music") audio.setMusicVolume(v);
+      else audio.setSfxVolume(v);
+    }
 
     // Coordonnées monde (pour hover slots/factories)
     const wx = x + game.camera.x;
@@ -3515,6 +3712,41 @@ function setupInput(canvas) {
       }
     }
 
+    // 0bis) Panneau Settings ouvert
+    if (game.ui.settingsOpen && game.ui.settingsRects) {
+      const sr = game.ui.settingsRects;
+      if (pointInRect(sx, sy, sr.close)) {
+        game.ui.settingsOpen = false; saveSettings(); return;
+      }
+      if (pointInRect(sx, sy, sr.musicToggle)) {
+        audio.setMusicEnabled(!audio.musicEnabled);
+        audio.playSFX("click"); saveSettings(); return;
+      }
+      if (pointInRect(sx, sy, sr.sfxToggle)) {
+        audio.setSfxEnabled(!audio.sfxEnabled);
+        audio.playSFX("click"); saveSettings(); return;
+      }
+      if (pointInRect(sx, sy, sr.musicSlider)) {
+        audio.setMusicVolume((sx - sr.musicSlider.x) / sr.musicSlider.w);
+        saveSettings(); return;
+      }
+      if (pointInRect(sx, sy, sr.sfxSlider)) {
+        audio.setSfxVolume((sx - sr.sfxSlider.x) / sr.sfxSlider.w);
+        audio.playSFX("click"); saveSettings(); return;
+      }
+      if (!pointInRect(sx, sy, sr.panel)) {
+        game.ui.settingsOpen = false; saveSettings(); return;
+      }
+      return;
+    }
+
+    // 0ter) Bouton ⚙️ Settings
+    if (game.ui.settingsBtn && pointInRect(sx, sy, game.ui.settingsBtn)) {
+      game.ui.settingsOpen = true;
+      audio.playSFX("click");
+      return;
+    }
+
     // 1) Bouton Éclair (coords ÉCRAN) ? → toggle du mode visée
     if (game.ui.lightningBtn && pointInRect(sx, sy, game.ui.lightningBtn)) {
       toggleLightningAim();
@@ -3623,8 +3855,13 @@ function setupInput(canvas) {
       return;
     }
     if (evt.key === "Escape") {
-      game.ui.selectedBuildType = null;
-      game.ui.upgradePanel = null;
+      if (game.ui.settingsOpen) {
+        game.ui.settingsOpen = false;
+        saveSettings();
+      } else {
+        game.ui.selectedBuildType = null;
+        game.ui.upgradePanel = null;
+      }
     }
     const keyMap = { "1": "light", "2": "heavy", "3": "swarmer", "4": "sniper", "5": "turret" };
     if (keyMap[evt.key]) {
