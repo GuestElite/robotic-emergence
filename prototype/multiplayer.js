@@ -28,6 +28,8 @@ const listeners = {
   chat: new Set(),             // message texte reçu via broadcast
   emote: new Set(),            // emote rapide reçue via broadcast
   peerInfo: new Set(),         // identité du peer (username + skin) reçue à la connexion
+  peerJoin: new Set(),         // quelqu'un (guest ou spectateur) entre dans le salon
+  peerLeave: new Set(),        // quelqu'un quitte le salon (presence drop)
   rematch: new Set(),          // request / cancel / start de rematch
 };
 
@@ -47,6 +49,7 @@ const state = {
   pollTimer: null,             // fallback poll DB
   startFired: false,           // garde-fou pour ne pas démarrer 2x
   me: null,                    // profil courant
+  presenceUsernames: {},       // key (user_id) -> { username, role } pour résoudre les leaves
 };
 
 function notify(key, payload) {
@@ -281,9 +284,32 @@ async function setupChannel() {
       });
     }
   });
+  ch.on("presence", { event: "sync" }, () => {
+    // Reseed la map d'usernames à partir de l'état complet de la presence
+    // (utile à la reconnexion / re-subscribe : on retrouve qui est là).
+    const ps = ch.presenceState();
+    state.presenceUsernames = {};
+    for (const k of Object.keys(ps)) {
+      const meta = ps[k]?.[0];
+      if (meta?.username) state.presenceUsernames[k] = { username: meta.username, role: meta.role };
+    }
+  });
+  ch.on("presence", { event: "join" }, ({ key, newPresences }) => {
+    const meta = newPresences?.[0];
+    if (!meta) return;
+    // Skip soi-même (le tracking local déclenche aussi un join event)
+    if (meta.user_id && state.me?.id && meta.user_id === state.me.id) return;
+    state.presenceUsernames[key] = { username: meta.username, role: meta.role };
+    notify("peerJoin", { key, username: meta.username, role: meta.role });
+  });
   ch.on("presence", { event: "leave" }, ({ key }) => {
+    const info = state.presenceUsernames[key];
+    delete state.presenceUsernames[key];
     if (state.opponent && key === state.opponent.id) {
       notify("opponentLeave", { id: key, reason: "presence_leave" });
+    }
+    if (info?.username) {
+      notify("peerLeave", { key, username: info.username, role: info.role });
     }
   });
 
@@ -554,6 +580,8 @@ const RE_MP = {
   onChat:          (cb) => on("chat", cb),
   onEmote:         (cb) => on("emote", cb),
   onPeerInfo:      (cb) => on("peerInfo", cb),
+  onPeerJoin:      (cb) => on("peerJoin", cb),
+  onPeerLeave:     (cb) => on("peerLeave", cb),
   onRematch:       (cb) => on("rematch", cb),
 };
 

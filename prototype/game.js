@@ -567,6 +567,30 @@ const audio = {
         osc.stop(now + 0.75);
         break;
       }
+      case "lobby-join": {
+        // Chime montant doux (C5 → G5).
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(523.25, now);
+        osc.frequency.exponentialRampToValueAtTime(783.99, now + 0.18);
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(0.07, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+        osc.start(now);
+        osc.stop(now + 0.3);
+        break;
+      }
+      case "lobby-leave": {
+        // Chime descendant doux (G5 → C5).
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(783.99, now);
+        osc.frequency.exponentialRampToValueAtTime(523.25, now + 0.18);
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(0.06, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+        osc.start(now);
+        osc.stop(now + 0.3);
+        break;
+      }
     }
   },
   startMusic() {
@@ -8847,6 +8871,8 @@ function startMultiplayer() {
     window.RE_MP.onChat(handleMpChat);
     window.RE_MP.onEmote(handleMpEmote);
     window.RE_MP.onRematch(handleMpRematch);
+    window.RE_MP.onPeerJoin(handleMpPeerJoin);
+    window.RE_MP.onPeerLeave(handleMpPeerLeave);
     window.RE_MP.onPeerInfo(({ skin, username, equippedSkins, from }) => {
       // Spectateur : on reçoit successivement host puis guest. On route chaque
       // skin vers le côté correspondant (host→player, guest→enemy) et on
@@ -9088,6 +9114,35 @@ function handleMpChat(payload) {
     receivedAt: performance.now(),
   });
   if (game.ui.chatMessages.length > 60) game.ui.chatMessages.shift();
+}
+
+// Pousse un message système local (pas broadcasté — chaque client détecte
+// join/leave via la présence Supabase). Style distinct dans le rendu chat.
+function pushSystemChatMessage(text) {
+  if (!game.ui.chatMessages) game.ui.chatMessages = [];
+  game.ui.chatMessages.push({
+    text,
+    username: "🛎️ Salon",
+    from: "system",
+    ts: Date.now(),
+    self: false,
+    receivedAt: performance.now(),
+  });
+  if (game.ui.chatMessages.length > 60) game.ui.chatMessages.shift();
+}
+
+function handleMpPeerJoin({ username, role }) {
+  if (!username) return;
+  const tag = role === "spectator" ? " (spectateur)" : "";
+  pushSystemChatMessage(`${username}${tag} a rejoint`);
+  audio.playSFX("lobby-join");
+}
+
+function handleMpPeerLeave({ username, role }) {
+  if (!username) return;
+  const tag = role === "spectator" ? " (spectateur)" : "";
+  pushSystemChatMessage(`${username}${tag} a quitté`);
+  audio.playSFX("lobby-leave");
 }
 
 async function mpCreateRoom(opts = {}) {
@@ -9688,7 +9743,9 @@ function drawChatPanel(ctx, opts) {
     const isMine = m.self
       || (game.mp?.role && m.from === game.mp.role)
       || (m.username && window.RE_AUTH?.profile?.username && m.username === window.RE_AUTH.profile.username);
-    ctx.fillStyle = isMine ? COLORS.hpGood : (m.from === "host" ? COLORS.player : COLORS.enemy);
+    ctx.fillStyle = m.from === "system" ? COLORS.hudMuted
+      : isMine ? COLORS.hpGood
+      : (m.from === "host" ? COLORS.player : COLORS.enemy);
     ctx.font = "bold 11px -apple-system, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(m.username || "anonyme", x + 12, cy + 10);
@@ -9812,7 +9869,9 @@ function drawInGameChat(ctx) {
     const isMine = m.self
       || (game.mp?.role && m.from === game.mp.role)
       || (m.username && window.RE_AUTH?.profile?.username && m.username === window.RE_AUTH.profile.username);
-    ctx.fillStyle = `rgba(${isMine ? "187,247,208" : m.from === "host" ? "59,130,246" : "239,68,68"},${alpha.toFixed(3)})`;
+    ctx.fillStyle = m.from === "system"
+      ? `rgba(148,163,184,${alpha.toFixed(3)})`
+      : `rgba(${isMine ? "187,247,208" : m.from === "host" ? "59,130,246" : "239,68,68"},${alpha.toFixed(3)})`;
     ctx.font = "bold 11px -apple-system, sans-serif";
     ctx.fillText(m.username || "anonyme", boxX + 10, cy + 12);
     ctx.fillStyle = `rgba(255,255,255,${alpha.toFixed(3)})`;
