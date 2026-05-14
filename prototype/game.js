@@ -766,8 +766,13 @@ function loadSettings() {
       game.difficulty = s.difficulty;
       game.preset = DIFFICULTY_PRESETS[s.difficulty];
     }
-    if (s.biome && ["desert", "jungle", "snow"].includes(s.biome)) {
+    if (s.biome && BIOME_LABELS[s.biome]) {
       game.biome = s.biome;
+      // Garde-fou : si on a reload sur wave + neon (state incohérent),
+      // on retombe sur desert. La règle "wave bloque les biomes 3D" reste.
+      if (game.difficulty === "wave" && BIOME_3D.has(s.biome)) {
+        game.biome = "desert";
+      }
     }
     if (typeof s.musicEnabled === "boolean") audio.musicEnabled = s.musicEnabled;
     if (typeof s.sfxEnabled === "boolean") audio.sfxEnabled = s.sfxEnabled;
@@ -1243,6 +1248,7 @@ const BIOME_GRADIENT_COLOR = {
   desert: "80, 50, 25",     // brun chaud sable
   jungle: "30, 50, 15",     // vert sombre humus
   snow:   "60, 90, 130",    // bleu glacé ombré
+  neon:   "120, 40, 200",   // violet néon (utilisé seulement en fallback texte)
 };
 
 // Affichage humain du biome dans l'UI
@@ -1250,7 +1256,14 @@ const BIOME_LABELS = {
   desert: "Désert",
   jungle: "Jungle",
   snow:   "Neige",
+  neon:   "Neon 3D",
 };
+
+// Biomes rendus en WebGL via three.js (three-biome.js). Le sol 2D est skip,
+// l'arrière-plan vient du canvas #game-canvas-3d. Ces biomes sont BLOQUÉS
+// en mode Vagues (lisibilité et perfs critiques en fin de partie).
+const BIOME_3D = new Set(["neon"]);
+function isBiome3D(biome) { return BIOME_3D.has(biome); }
 
 function spritePathFor(name, biome) {
   // Sprites biome-specific (tile-ground + enemy units + enemy factories)
@@ -1283,6 +1296,12 @@ async function loadAllSprites() {
 async function applyBiome(newBiome) {
   if (!BIOME_LABELS[newBiome]) return;  // biome inconnu, ignore
   game.biome = newBiome;
+  // Bascule du rendu 3D : activate quand on entre dans un biome WebGL,
+  // deactivate sinon. Idempotent — l'API gère les transitions internes.
+  if (window.RE_3D) {
+    if (isBiome3D(newBiome)) window.RE_3D.activate(newBiome);
+    else window.RE_3D.deactivate();
+  }
   const toReload = [...BIOME_SPECIFIC_SPRITES].filter((n) => SPRITE_FILES.includes(n));
   await Promise.all(toReload.map((n) => loadSprite(n, newBiome)));
 }
@@ -3541,6 +3560,11 @@ function gameLoop(timestamp) {
     console.error("[update]", e);
   }
   ctx.clearRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
+  // Rendu 3D du biome WebGL (sol + props) avant le 2D — il occupe le canvas
+  // dédié sous le 2D, à la même position. Le coût est nul si non actif.
+  if (window.RE_3D && window.RE_3D.isActive()) {
+    try { window.RE_3D.render(game.camera?.x || 0, dt); } catch (e) { console.warn("[RE_3D] render", e); }
+  }
   try {
     render(ctx);
   } catch (e) {
@@ -3572,6 +3596,11 @@ function gameLoop(timestamp) {
 // -------------------------------------------------------------
 
 function drawGround(ctx) {
+  // Biome 3D (WebGL) : sol rendu par three.js dans le canvas dédié sous le
+  // 2D. On ne dessine rien sur le canvas 2D → les pixels restent transparents
+  // et le rendu three.js apparaît.
+  if (isBiome3D(game.biome)) return;
+
   // 1) Tile-ground (texture grain sable, tileable, couleur uniforme)
   if (sprites["tile-ground"]) {
     const tile = sprites["tile-ground"];
@@ -6264,12 +6293,14 @@ function drawMenu(ctx) {
   ctx.textBaseline = "alphabetic";
   ctx.fillText("BIOME", cx, 336);
 
-  const biomeBtnW = 130, biomeBtnH = 56, biomeGap = 14;
-  const biomeTotalW = 3 * biomeBtnW + 2 * biomeGap;
+  // Neon 3D : ne peut pas être proposé en mode Vagues (perfs + lisibilité).
+  const allowNeon = game.difficulty !== "wave";
+  const biomeOrder = allowNeon ? ["desert", "jungle", "snow", "neon"] : ["desert", "jungle", "snow"];
+  const biomeEmoji = { desert: "🏜️", jungle: "🌴", snow: "❄️", neon: "🌌" };
+  const biomeBtnW = 116, biomeBtnH = 56, biomeGap = 12;
+  const biomeTotalW = biomeOrder.length * biomeBtnW + (biomeOrder.length - 1) * biomeGap;
   const biomeStartX = cx - biomeTotalW / 2;
   const biomeY = 350;
-  const biomeOrder = ["desert", "jungle", "snow"];
-  const biomeEmoji = { desert: "🏜️", jungle: "🌴", snow: "❄️" };
   const biomeRects = [];
 
   for (const [i, key] of biomeOrder.entries()) {
@@ -7683,6 +7714,10 @@ function setupInput(canvas) {
         if (pointInRect(sx, sy, d.rect)) {
           game.difficulty = d.key;
           game.preset = DIFFICULTY_PRESETS[d.key];
+          // Wave + biome 3D incompatibles → fallback silencieux vers desert.
+          if (d.key === "wave" && isBiome3D(game.biome)) {
+            applyBiome("desert");
+          }
           audio.playSFX("click");
           saveSettings();
           return;
@@ -10491,6 +10526,13 @@ async function boot() {
     await Promise.all([loadAllSprites(), audio.preloadWavs()]);
   } catch (err) {
     console.warn("[Émergence] Erreur de chargement des assets :", err);
+  }
+
+  // Si le biome chargé depuis localStorage est un biome 3D, on déclenche
+  // l'activation WebGL maintenant. (applyBiome est async mais on n'a pas
+  // besoin d'attendre — la 1ère frame trouvera RE_3D prêt ou pas.)
+  if (window.RE_3D && isBiome3D(game.biome)) {
+    window.RE_3D.activate(game.biome);
   }
 
   // Précharge la menu music (le user peut la changer via le dropdown menu).

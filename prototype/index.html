@@ -18,7 +18,12 @@
     <p>Tourne ton téléphone en mode paysage pour jouer</p>
   </div>
   <div id="game-wrapper">
-    <canvas id="game-canvas" width="1280" height="720"></canvas>
+    <div id="game-canvas-stack">
+      <!-- Canvas 3D : visible uniquement pour les biomes en mode three.js (ex: neon).
+           Sinon caché (display:none) — ne consomme pas de GPU quand inactif. -->
+      <canvas id="game-canvas-3d" width="1280" height="720"></canvas>
+      <canvas id="game-canvas" width="1280" height="720"></canvas>
+    </div>
     <!-- Input invisible utilisé sur mobile pour faire apparaître le clavier
          virtuel quand on entre en mode chat ou saisie de code lobby.
          Géré par game.js : focus/blur déclenchés en sync avec game.ui state. -->
@@ -33,6 +38,7 @@
   </div>
   <script type="module" src="auth-bridge.js"></script>
   <script type="module" src="multiplayer.js"></script>
+  <script type="module" src="three-biome.js"></script>
   <script src="game.js"></script>
   <script>
     if ("serviceWorker" in navigator) {
