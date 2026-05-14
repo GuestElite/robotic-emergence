@@ -1970,7 +1970,7 @@ function updateCameraShake(dt) {
 // Par-dessus le tier, scaling fin de +8%/vague (HP & dmg, cumulé).
 //
 // Spawn étalé (2.0s → 1.0s). Fin de vague = queue vide → timer inter-vague
-// de 10s puis vague suivante (même si des unités sont encore vivantes —
+// de 3s puis vague suivante (même si des unités sont encore vivantes —
 // les restes s'accumulent → pression croissante).
 //
 // Boss : vagues %5 → heavy ×3 HP / ×2 dmg.
@@ -2107,7 +2107,7 @@ function updateWaveSpawning(dt) {
   w.lastBonus = bonus;
   w.current++;
   w.inWave = false;
-  w.betweenWaves = 10;
+  w.betweenWaves = 3;
   w.justClearedAt = performance.now();
 }
 
