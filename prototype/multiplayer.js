@@ -266,6 +266,20 @@ async function setupChannel() {
         },
       });
     }
+    // Le spectateur joue souvent APRÈS l'échange hello host↔guest : il ne
+    // recevrait jamais leurs skins. Quand un spectateur dit bonjour, host
+    // et guest renvoient leur identité pour qu'il puisse colorer les deux camps.
+    if ((state.role === "host" || state.role === "guest") && payload?.from === "spectator") {
+      ch.send({
+        type: "broadcast", event: "hello",
+        payload: {
+          from: state.role,
+          username: state.me?.username || null,
+          skin: state.mySkin ? { hex_color: state.mySkin.hex_color, hex_color_dark: state.mySkin.hex_color_dark } : null,
+          equippedSkins: state.myEquippedSkins || {},
+        },
+      });
+    }
   });
   ch.on("presence", { event: "leave" }, ({ key }) => {
     if (state.opponent && key === state.opponent.id) {

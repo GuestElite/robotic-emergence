@@ -126,6 +126,9 @@
       <h2 style="margin-top: 28px">Sessions invités récentes</h2>
       <p class="muted small">50 dernières parties loggées en mode invité.</p>
       <table class="table" id="guestSessionsTable"></table>
+      <h2 style="margin-top: 28px">🎥 Spectateurs</h2>
+      <p class="muted small">Visionnages de parties MP (host + guest joués par d'autres). 100 sessions les plus récentes — connectés et invités confondus.</p>
+      <table class="table" id="spectatorsTable"></table>
     </div>
   </div>
 
@@ -384,6 +387,32 @@
                <td>${r.units_killed || 0}</td>
                <td class="muted small">${fmtDate(r.created_at)}</td>
              </tr>`).join("")}</tbody>`;
+
+      // Spectateurs
+      const { data: specs, error: errSpec } = await supabase
+        .from("re_spectator_sessions")
+        .select("id, guest_username, duration_seconds, lobby_id, created_at, user_id, re_profiles!re_spectator_sessions_user_id_fkey(username)")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      const specTable = document.getElementById("spectatorsTable");
+      if (errSpec) {
+        specTable.innerHTML = `<tr><td class="muted">Erreur : ${errSpec.message}</td></tr>`;
+      } else if (!specs || specs.length === 0) {
+        specTable.innerHTML = `<tr><td class="muted">Aucun spectateur loggé pour l'instant.</td></tr>`;
+      } else {
+        specTable.innerHTML = `<thead><tr><th>Identité</th><th>Type</th><th>Lobby</th><th>Durée vue</th><th>Date</th></tr></thead>
+          <tbody>${specs.map(s => {
+            const name = s.user_id ? (s.re_profiles?.username || "(compte sans pseudo)") : (s.guest_username || "(?)");
+            const type = s.user_id ? "compte" : "invité";
+            return `<tr>
+              <td><code>${name}</code></td>
+              <td>${type}</td>
+              <td class="muted small">${s.lobby_id ? s.lobby_id.slice(0, 8) + "…" : "—"}</td>
+              <td>${fmtDur(s.duration_seconds || 0)}</td>
+              <td class="muted small">${fmtDate(s.created_at)}</td>
+            </tr>`;
+          }).join("")}</tbody>`;
+      }
     }
     await loadGuests();
   </script>

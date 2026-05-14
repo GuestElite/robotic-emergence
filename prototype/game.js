@@ -2564,6 +2564,27 @@ function checkGameOver() {
   }
 }
 
+// Pousse une entrée de session spectateur (durée écoulée depuis le join).
+// Appelée à la sortie explicite et à la fin de partie observée.
+// Idempotent : reset spectatorJoinedAt après envoi pour éviter le double-log.
+async function logSpectatorSessionEnd() {
+  const mp = game.mp;
+  if (!mp || mp.role !== "spectator") return;
+  if (!mp.spectatorJoinedAt) return;
+  const duration = Math.max(0, Math.floor((Date.now() - mp.spectatorJoinedAt) / 1000));
+  mp.spectatorJoinedAt = null;
+  try {
+    const { supabase } = await import("/lib/supabase.js");
+    await supabase.rpc("re_log_spectator_session", {
+      p_guest_username: window.RE_AUTH?.session ? null : (window.RE_AUTH?.guestUsername || null),
+      p_lobby_id: mp.lobbyId || null,
+      p_duration_seconds: duration,
+    });
+  } catch (err) {
+    console.warn("[RE] spectator log failed:", err);
+  }
+}
+
 async function recordWaveRun(waves) {
   if (!window.RE_AUTH || !window.RE_AUTH.session) return;
   try {
@@ -2664,6 +2685,22 @@ function applyPeerSkin(skin) {
   if (!skin || !skin.hex_color || !skin.hex_color_dark) return;
   const opp = oppSide();
   if (opp === "player") {
+    COLORS.player = skin.hex_color;
+    COLORS.playerDark = skin.hex_color_dark;
+    COLORS.playerSoft = hexToRgba(skin.hex_color, 0.15);
+  } else {
+    COLORS.enemy = skin.hex_color;
+    COLORS.enemyDark = skin.hex_color_dark;
+  }
+}
+
+// Spectateur : on connaît le rôle du peer émetteur (host/guest), donc on peut
+// router le skin vers le bon côté du canvas (host=player, guest=enemy).
+function applyPeerSkinForRole(skin, fromRole) {
+  if (!skin || !skin.hex_color || !skin.hex_color_dark) return;
+  const side = fromRole === "host" ? "player" : fromRole === "guest" ? "enemy" : null;
+  if (!side) return;
+  if (side === "player") {
     COLORS.player = skin.hex_color;
     COLORS.playerDark = skin.hex_color_dark;
     COLORS.playerSoft = hexToRgba(skin.hex_color, 0.15);
@@ -4199,7 +4236,8 @@ function drawHoverRange(ctx) {
 function unitSpriteNameFor(u) {
   // Résolution du tier de skin selon mode/rôle/side (commun médic + autres unités).
   // Solo : seul "player" = moi a un skin. MP : host/guest miroir.
-  // Spectator : pas de skin (on n'a pas l'équipement des deux peers).
+  // Spectator : on lit les equippedSkins des deux peers (indexés par rôle)
+  // — host→player, guest→enemy.
   let tier = null;
   const myEquipped = window.RE_AUTH?.equippedSkins || {};
   const peerEquipped = game.mp?.peerEquippedSkins || {};
@@ -4210,6 +4248,10 @@ function unitSpriteNameFor(u) {
     } else if (game.mp?.role === "guest") {
       if (u.side === "enemy") tier = myEquipped[u.typeId];
       else if (u.side === "player") tier = peerEquipped[u.typeId];
+    } else if (game.mp?.role === "spectator") {
+      const byRole = game.mp?.peerEquippedSkinsByRole || {};
+      if (u.side === "player") tier = (byRole.host || {})[u.typeId];
+      else if (u.side === "enemy") tier = (byRole.guest || {})[u.typeId];
     }
   } else {
     if (u.side === "player") tier = myEquipped[u.typeId];
@@ -8018,6 +8060,7 @@ function setupInput(canvas) {
     }
     if (game.ui.spectatorLeaveBtn && pointInRect(sx, sy, game.ui.spectatorLeaveBtn)) {
       audio.playSFX("click");
+      logSpectatorSessionEnd();
       goToMenu();
       return;
     }
@@ -8805,11 +8848,22 @@ function startMultiplayer() {
     window.RE_MP.onEmote(handleMpEmote);
     window.RE_MP.onRematch(handleMpRematch);
     window.RE_MP.onPeerInfo(({ skin, username, equippedSkins, from }) => {
-      if (skin) applyPeerSkin(skin);
-      // Stocke les skins équipés du peer pour que unitSpriteNameFor puisse
-      // appliquer les bons sprites à ses unités côté oppSide().
-      if (game.mp && equippedSkins) {
-        game.mp.peerEquippedSkins = equippedSkins;
+      // Spectateur : on reçoit successivement host puis guest. On route chaque
+      // skin vers le côté correspondant (host→player, guest→enemy) et on
+      // mémorise leurs equippedSkins séparément pour les sprites par unité.
+      if (game.mp?.role === "spectator") {
+        if (skin) applyPeerSkinForRole(skin, from);
+        if (game.mp && equippedSkins && (from === "host" || from === "guest")) {
+          game.mp.peerEquippedSkinsByRole = game.mp.peerEquippedSkinsByRole || {};
+          game.mp.peerEquippedSkinsByRole[from] = equippedSkins;
+        }
+      } else {
+        if (skin) applyPeerSkin(skin);
+        // Stocke les skins équipés du peer pour que unitSpriteNameFor puisse
+        // appliquer les bons sprites à ses unités côté oppSide().
+        if (game.mp && equippedSkins) {
+          game.mp.peerEquippedSkins = equippedSkins;
+        }
       }
       if (game.mp && username) {
         if (from === "host") game.mp.hostUsername = username;
@@ -8838,6 +8892,8 @@ async function spectateLobby(lobbyMeta) {
   game.mp.opponent = null;
   game.mp.status = "playing";
   game.mp.seed = res.seed;
+  game.mp.spectatorJoinedAt = Date.now();
+  game.mp.peerEquippedSkinsByRole = {};
   game.biome = res.biome || game.biome;
   game.difficulty = res.difficulty || game.difficulty;
   if (DIFFICULTY_PRESETS[game.difficulty]) game.preset = DIFFICULTY_PRESETS[game.difficulty];
@@ -10303,6 +10359,11 @@ function handleMpGameOver({ winnerSide }) {
     const mappedWinner = winnerSide === "player" ? "host" : "guest";
     try { window.RE_MP.sendGameOver(winnerSide); } catch {}
     try { window.RE_MP.reportFinish(mappedWinner); } catch {}
+  }
+  // Spectateur : la partie observée se termine → on flush son temps de visionnage.
+  if (game.mp?.role === "spectator") {
+    logSpectatorSessionEnd();
+    return;
   }
   // Que ce soit côté host ou guest, on enregistre son propre résultat pour
   // créditer la monnaie et faire avancer les missions.
