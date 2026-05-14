@@ -246,6 +246,21 @@ function upgradeCost(stat, currentLevel) {
   return Math.round(stat.baseCost * Math.pow(2, currentLevel));
 }
 
+// Coût cumulé pour monter `count` paliers depuis `currentLevel` (raccourci ×5).
+// Cap par MAX_UPGRADE_LEVEL : si on dépasse, on s'arrête à la limite.
+function bulkUpgradeCost(stat, currentLevel, count) {
+  let total = 0;
+  for (let i = 0; i < count && currentLevel + i < MAX_UPGRADE_LEVEL; i++) {
+    total += upgradeCost(stat, currentLevel + i);
+  }
+  return total;
+}
+
+// Nombre de paliers possibles pour un raccourci ×5 depuis le niveau courant.
+function bulkUpgradeSteps(currentLevel, requested = 5) {
+  return Math.max(0, Math.min(requested, MAX_UPGRADE_LEVEL - currentLevel));
+}
+
 function statMultiplier(level, perLevel) {
   return 1 + perLevel * level;
 }
@@ -5008,6 +5023,35 @@ function drawUpgradePanel(ctx) {
 
     if (enabled) rects.upgrades.push({ rect: btnRect, statId: stat.id });
 
+    // Raccourci bulk ×N (jusqu'à 5 paliers d'un coup) à gauche du bouton +1.
+    // Visible uniquement pour le joueur, si au moins 2 paliers restent.
+    const bulkN = bulkUpgradeSteps(lvl, 5);
+    if (isPlayer && !isMax && bulkN >= 2) {
+      const bulkW = 56;
+      const bulkRect = { x: btnRect.x - 4 - bulkW, y: btnRect.y, w: bulkW, h: btnRect.h };
+      const bulkCost = bulkUpgradeCost(stat, lvl, bulkN);
+      const bulkAfford = state.money >= bulkCost;
+      const bulkHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, bulkRect);
+      let bulkFill;
+      if (!bulkAfford) bulkFill = COLORS.btnDisabled;
+      else if (bulkHover) bulkFill = "rgba(168, 85, 247, 0.55)";
+      else bulkFill = "rgba(168, 85, 247, 0.32)";
+      ctx.fillStyle = bulkFill;
+      roundedRect(ctx, bulkRect.x, bulkRect.y, bulkRect.w, bulkRect.h, 6);
+      ctx.fill();
+      ctx.strokeStyle = bulkAfford ? "rgba(168, 85, 247, 0.85)" : "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = bulkAfford ? "#fff" : COLORS.hudMuted;
+      ctx.font = "bold 11px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`×${bulkN}`, bulkRect.x + bulkRect.w / 2, bulkRect.y + bulkRect.h / 2 - 6);
+      ctx.font = "9px -apple-system, sans-serif";
+      ctx.fillText(`${bulkCost}💰`, bulkRect.x + bulkRect.w / 2, bulkRect.y + bulkRect.h / 2 + 7);
+      if (bulkAfford) rects.upgrades.push({ rect: bulkRect, statId: stat.id, bulk: bulkN });
+    }
+
     cursorY += rowH;
   }
 
@@ -5240,6 +5284,34 @@ function drawTurretUpgradePanel(ctx, geo) {
     ctx.fillText(isMax ? "✓ MAX" : `+ ${cost}💰`, btnRect.x + btnRect.w / 2, btnRect.y + btnRect.h / 2);
 
     if (enabled) rects.upgrades.push({ rect: btnRect, statId: stat.id });
+
+    // Raccourci bulk ×N pour tourelle (même logique que pour les usines).
+    const bulkN = bulkUpgradeSteps(lvl, 5);
+    if (isPlayer && !isMax && bulkN >= 2) {
+      const bulkW = 56;
+      const bulkRect = { x: btnRect.x - 4 - bulkW, y: btnRect.y, w: bulkW, h: btnRect.h };
+      const bulkCost = bulkUpgradeCost(stat, lvl, bulkN);
+      const bulkAfford = state.money >= bulkCost;
+      const bulkHover = pointInRect(game.ui.mouseScreen.x, game.ui.mouseScreen.y, bulkRect);
+      let bulkFill;
+      if (!bulkAfford) bulkFill = COLORS.btnDisabled;
+      else if (bulkHover) bulkFill = "rgba(168, 85, 247, 0.55)";
+      else bulkFill = "rgba(168, 85, 247, 0.32)";
+      ctx.fillStyle = bulkFill;
+      roundedRect(ctx, bulkRect.x, bulkRect.y, bulkRect.w, bulkRect.h, 6);
+      ctx.fill();
+      ctx.strokeStyle = bulkAfford ? "rgba(168, 85, 247, 0.85)" : "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = bulkAfford ? "#fff" : COLORS.hudMuted;
+      ctx.font = "bold 11px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`×${bulkN}`, bulkRect.x + bulkRect.w / 2, bulkRect.y + bulkRect.h / 2 - 6);
+      ctx.font = "9px -apple-system, sans-serif";
+      ctx.fillText(`${bulkCost}💰`, bulkRect.x + bulkRect.w / 2, bulkRect.y + bulkRect.h / 2 + 7);
+      if (bulkAfford) rects.upgrades.push({ rect: bulkRect, statId: stat.id, bulk: bulkN });
+    }
 
     cursorY += rowH;
   }
@@ -7733,13 +7805,20 @@ function setupInput(canvas) {
       if (sel.side === mineSide && pr.upgrades) {
         for (const u of pr.upgrades) {
           if (pointInRect(sx, sy, u.rect)) {
+            const steps = u.bulk || 1;
             if (isGuestMp) {
-              if (isTurretPanel) window.RE_MP.sendInput({ type: "upgrade_turret", wallSlotIndex: sel.index, statId: u.statId });
-              else window.RE_MP.sendInput({ type: "upgrade_factory", slotIndex: sel.slotIndex, statId: u.statId });
+              for (let i = 0; i < steps; i++) {
+                if (isTurretPanel) window.RE_MP.sendInput({ type: "upgrade_turret", wallSlotIndex: sel.index, statId: u.statId });
+                else window.RE_MP.sendInput({ type: "upgrade_factory", slotIndex: sel.slotIndex, statId: u.statId });
+              }
               audio.playSFX("upgrade");
             } else {
-              if (isTurretPanel) tryUpgradeTurret(mineSide, sel.index, u.statId);
-              else tryUpgradeFactory(mineSide, sel.slotIndex, u.statId);
+              for (let i = 0; i < steps; i++) {
+                const ok = isTurretPanel
+                  ? tryUpgradeTurret(mineSide, sel.index, u.statId)
+                  : tryUpgradeFactory(mineSide, sel.slotIndex, u.statId);
+                if (!ok) break;
+              }
             }
             return;
           }
