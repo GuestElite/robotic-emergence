@@ -2007,8 +2007,8 @@ function updateCameraShake(dt) {
 // triplement d'unités au-delà de 2430 (ancre 8s) — 810→6s, 2430→8s,
 // 7290→16s, 21870→32s, 65610→64s, 196830→128s. Plancher 6s. Multi-spawn
 // par frame absorbe les intervals très courts. Timer inter-vague : 10s.
-// Taille de vague ×3 entre chaque vague (base 10) sans cap : v1=10, v2=30,
-// v3=90, v4=270, v5=810, v6=2430… Fin de vague = queue vide → timer inter-
+// Taille de vague ×1.5 entre chaque vague (base 10) sans cap : v1=10, v2=15,
+// v3=23, v4=34, v5=51, v6=76, v7=114… Fin de vague = queue vide → timer inter-
 // vague de 3s puis vague suivante (même si des unités sont encore vivantes
 // — les restes s'accumulent → pression croissante).
 //
@@ -2023,10 +2023,10 @@ function enemyTierForWave(waveNum) {
 
 function buildWaveQueue(waveNum) {
   const queue = [];
-  // Densité : ×3 entre chaque vague (geometric). Base = 10 unités vague 1.
-  // Pas de cap : v1=10, v2=30, v3=90, v4=270, v5=810, v6=2430… framerate
-  // mis à l'épreuve volontairement à partir de la vague 5-6.
-  const total = Math.round(10 * Math.pow(3, waveNum - 1));
+  // Densité : ×1.5 entre chaque vague (geometric). Base = 10 unités vague 1.
+  // Pas de cap : v1=10, v2=15, v3=23, v4=34, v5=51, v6=76, v7=114… courbe
+  // plus douce, tension qui monte sur la durée.
+  const total = Math.round(10 * Math.pow(1.5, waveNum - 1));
   for (let i = 0; i < total; i++) {
     const r = Math.random();
     let typeId;
