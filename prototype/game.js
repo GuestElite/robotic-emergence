@@ -1984,9 +1984,10 @@ function updateCameraShake(dt) {
 //   - Vagues 7+  : Tier III (×3.10 HP/dmg, ×1.15 speed, ×1.22 range, ×1.40 radius)
 // Par-dessus le tier, scaling fin de +8%/vague (HP & dmg, cumulé).
 //
-// Spawn étalé (2.0s → 1.0s). Fin de vague = queue vide → timer inter-vague
-// de 3s puis vague suivante (même si des unités sont encore vivantes —
-// les restes s'accumulent → pression croissante).
+// Spawn rapide (0.60s → 0.30s). Vague 1 (~10 unités) dure ~6s, vague 10
+// (~33 unités) ~10s. Fin de vague = queue vide → timer inter-vague de 3s
+// puis vague suivante (même si des unités sont encore vivantes — les
+// restes s'accumulent → pression croissante).
 //
 // Boss : vagues %5 → heavy ×3 HP / ×2 dmg.
 // Mini-boss : vagues 3, 7, 11… (≥3 et %4===3, sauf si déjà boss) → heavy
@@ -2093,9 +2094,9 @@ function updateWaveSpawning(dt) {
       w.totalThisWave = w.queue.length;
       w.inWave = true;
       w.spawnTimer = 0;
-      // Spawn rate : démarre à 2.0s entre 2 unités, accélère 0.10s/vague jusqu'à 1.0s.
-      // Vagues étalées plusieurs secondes → laisse au joueur le temps de réagir.
-      w.spawnInterval = Math.max(1.0, 2.0 - (w.current - 1) * 0.10);
+      // Spawn rate : démarre à 0.60s entre 2 unités, accélère 0.04s/vague jusqu'à 0.30s.
+      // Cible : vague 1 (10 unités) spawne en ~6s, vague 10 (33 unités) en ~10s.
+      w.spawnInterval = Math.max(0.30, 0.60 - (w.current - 1) * 0.04);
       w.justClearedAt = null;
     }
     return;
