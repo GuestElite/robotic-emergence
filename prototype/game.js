@@ -2593,7 +2593,9 @@ function notifyGameOver(winnerSide) {
 async function sendGameResultToBackend(result) {
   // En spectateur on n'enregistre rien (on n'a pas joué).
   if (game.mode === "mp" && game.mp?.role === "spectator") return;
-  if (!window.RE_AUTH || !window.RE_AUTH.session) return;
+  if (!window.RE_AUTH) return;
+  // MP exige une session ; en solo les invités sont loggés via guest_username.
+  if (game.mode === "mp" && !window.RE_AUTH.session) return;
   const ps = game.stats[mySide()] || game.stats.player;
   const payload = {
     difficulty:    game.difficulty,

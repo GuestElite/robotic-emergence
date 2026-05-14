@@ -39,6 +39,7 @@
       <div class="tab" data-tab="shop">🛍️ Boutique</div>
       <div class="tab" data-tab="rules">💰 Règles de currency</div>
       <div class="tab" data-tab="users">👥 Joueurs</div>
+      <div class="tab" data-tab="guests">👤 Invités</div>
     </div>
 
     <!-- MISSIONS -->
@@ -115,6 +116,16 @@
       <h2>Joueurs</h2>
       <p class="muted small">Liste des comptes inscrits (max 100 derniers). Toggle admin / reset currency.</p>
       <table class="table" id="usersTable"></table>
+    </div>
+
+    <!-- GUESTS -->
+    <div class="panel" id="panel-guests">
+      <h2>Invités</h2>
+      <p class="muted small">Joueurs sans compte connecté — identifiés par un pseudo généré localement (ex. <code>invite145252</code>) stocké dans le navigateur. Agrégation sur les 1000 dernières parties invitées.</p>
+      <table class="table" id="guestsTable"></table>
+      <h2 style="margin-top: 28px">Sessions invités récentes</h2>
+      <p class="muted small">50 dernières parties loggées en mode invité.</p>
+      <table class="table" id="guestSessionsTable"></table>
     </div>
   </div>
 
@@ -318,6 +329,63 @@
         await loadUsers();
       }
     });
+
+    // ─── GUESTS ────────────────────────────────────────────────────
+    async function loadGuests() {
+      const { data, error } = await supabase
+        .from("re_game_results")
+        .select("guest_username, difficulty, result, duration, units_killed, created_at")
+        .not("guest_username", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(1000);
+      if (error) {
+        document.getElementById("guestsTable").innerHTML = `<tr><td class="muted">Erreur : ${error.message}</td></tr>`;
+        return;
+      }
+      const rows = data || [];
+      // Agrégation par guest_username
+      const agg = new Map();
+      for (const r of rows) {
+        const key = r.guest_username;
+        if (!agg.has(key)) agg.set(key, { username: key, games: 0, wins: 0, kills: 0, durationSec: 0, lastSeen: r.created_at });
+        const a = agg.get(key);
+        a.games++;
+        if (r.result === "win") a.wins++;
+        a.kills += r.units_killed || 0;
+        a.durationSec += r.duration || 0;
+        if (new Date(r.created_at) > new Date(a.lastSeen)) a.lastSeen = r.created_at;
+      }
+      const list = [...agg.values()].sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
+      const fmtDate = (d) => new Date(d).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
+      const fmtDur = (s) => { const m = Math.floor(s / 60); const r = s % 60; return `${m}m ${r}s`; };
+      document.getElementById("guestsTable").innerHTML = list.length === 0
+        ? `<tr><td class="muted">Aucun invité loggé pour l'instant.</td></tr>`
+        : `<thead><tr><th>Pseudo</th><th>Parties</th><th>Victoires</th><th>Kills</th><th>Temps joué</th><th>Dernière session</th></tr></thead>
+           <tbody>${list.map(g => `
+             <tr>
+               <td><code>${g.username}</code></td>
+               <td>${g.games}</td>
+               <td>${g.wins} <span class="muted small">(${Math.round(100 * g.wins / g.games)}%)</span></td>
+               <td>${g.kills}</td>
+               <td class="muted small">${fmtDur(g.durationSec)}</td>
+               <td class="muted small">${fmtDate(g.lastSeen)}</td>
+             </tr>`).join("")}</tbody>`;
+      // Sessions récentes brutes (50)
+      const recent = rows.slice(0, 50);
+      document.getElementById("guestSessionsTable").innerHTML = recent.length === 0
+        ? `<tr><td class="muted">—</td></tr>`
+        : `<thead><tr><th>Pseudo</th><th>Difficulté</th><th>Résultat</th><th>Durée</th><th>Kills</th><th>Date</th></tr></thead>
+           <tbody>${recent.map(r => `
+             <tr>
+               <td><code>${r.guest_username}</code></td>
+               <td>${r.difficulty}</td>
+               <td>${r.result === "win" ? "🏆 win" : "💀 lose"}</td>
+               <td class="muted small">${fmtDur(r.duration || 0)}</td>
+               <td>${r.units_killed || 0}</td>
+               <td class="muted small">${fmtDate(r.created_at)}</td>
+             </tr>`).join("")}</tbody>`;
+    }
+    await loadGuests();
   </script>
 </body>
 </html>

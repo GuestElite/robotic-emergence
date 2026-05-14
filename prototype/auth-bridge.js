@@ -2,12 +2,31 @@
 // Expose window.RE_AUTH avec session, profile, skin, methods de save game results, etc.
 import { supabase, getProfile, getCurrentSkin, getEquippedSkinTiers } from "/lib/supabase.js";
 
+// Identifiant invité stable, stocké côté navigateur. Format : "invite######"
+// (6 chiffres). Sert à logger les parties des joueurs non connectés dans
+// re_game_results pour visibilité admin.
+const GUEST_USERNAME_KEY = "re-guest-username";
+function getOrCreateGuestUsername() {
+  try {
+    let v = localStorage.getItem(GUEST_USERNAME_KEY);
+    if (v && /^invite\d{6}$/.test(v)) return v;
+    const n = Math.floor(100000 + Math.random() * 900000);
+    v = `invite${n}`;
+    localStorage.setItem(GUEST_USERNAME_KEY, v);
+    return v;
+  } catch {
+    // localStorage indisponible (mode privé strict) — pseudo éphémère.
+    return `invite${Math.floor(100000 + Math.random() * 900000)}`;
+  }
+}
+
 const RE_AUTH = {
   ready: false,
   session: null,
   profile: null,
   skin: null,           // { hex_color, hex_color_dark } ou null (couleur d'équipe legacy — tint UI)
   equippedSkins: {},    // { light: 1, heavy: 2, ... } — tier équipé par unité (override sprite)
+  guestUsername: getOrCreateGuestUsername(),
 
   async refresh() {
     const { data: { session } } = await supabase.auth.getSession();
@@ -32,9 +51,10 @@ const RE_AUTH = {
   },
 
   // Appelé par game.js à la fin d'une partie. Envoie tout d'un coup.
+  // - Connecté : RPC re_finish_game (currency, missions, ELO).
+  // - Invité  : RPC re_finish_game_guest (log seul, pas de récompense).
   async finishGame(payload) {
-    if (!this.session) return { ok: false, error: "not_authenticated" };
-    const { data, error } = await supabase.rpc("re_finish_game", {
+    const common = {
       p_difficulty:    payload.difficulty,
       p_result:        payload.result,
       p_duration:      Math.floor(payload.duration || 0),
@@ -44,8 +64,21 @@ const RE_AUTH = {
       p_damage_taken:  Math.floor(payload.damageTaken || 0),
       p_turrets_built: payload.turretsBuilt || 0,
       p_lightning_used:payload.lightningUsed || 0,
-      p_mode:          payload.mode === "mp" ? "mp" : "solo",
-      p_lobby_id:      payload.lobbyId || null,
+    };
+
+    if (!this.session) {
+      const { data, error } = await supabase.rpc("re_finish_game_guest", {
+        ...common,
+        p_guest_username: this.guestUsername,
+      });
+      if (error || !data?.ok) return { ok: false, error: error?.message || data?.error || "guest_log_failed" };
+      return { ok: true, reward: 0, resultId: data.result_id, eloDelta: 0, mode: "solo", guest: true };
+    }
+
+    const { data, error } = await supabase.rpc("re_finish_game", {
+      ...common,
+      p_mode:     payload.mode === "mp" ? "mp" : "solo",
+      p_lobby_id: payload.lobbyId || null,
     });
     if (error || !data?.ok) return { ok: false, error: error?.message || data?.error };
     // Met à jour le solde local
