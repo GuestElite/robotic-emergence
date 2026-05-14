@@ -1984,9 +1984,10 @@ function updateCameraShake(dt) {
 //   - Vagues 7+  : Tier III (×3.10 HP/dmg, ×1.15 speed, ×1.22 range, ×1.40 radius)
 // Par-dessus le tier, scaling fin de +8%/vague (HP & dmg, cumulé).
 //
-// Spawn interval auto-ajusté à la taille de vague : durée cible = 6s
-// jusqu'à v5, puis +2s/vague (v6=8s, v7=10s, v8=12s…). Multi-spawn par
-// frame absorbe les intervals très courts.
+// Spawn interval indexé sur le nombre d'unités (pas la vague) : durée
+// cible = 6s tant que total ≤ 810, puis +2s chaque triplement (810→6s,
+// 2430→8s, 7290→10s, …). Multi-spawn par frame absorbe les intervals
+// très courts.
 // Taille de vague ×3 entre chaque vague (base 10) sans cap : v1=10, v2=30,
 // v3=90, v4=270, v5=810, v6=2430… Fin de vague = queue vide → timer inter-
 // vague de 3s puis vague suivante (même si des unités sont encore vivantes
@@ -2099,12 +2100,13 @@ function updateWaveSpawning(dt) {
       w.totalThisWave = w.queue.length;
       w.inWave = true;
       w.spawnTimer = 0;
-      // Spawn interval auto-ajusté : durée cible = 6s jusqu'à la vague 5, puis
-      // +2s/vague pour laisser respirer (v6=8s, v7=10s, v8=12s, etc).
-      // Pas de cap minimum : multi-spawn par frame absorbe les intervals
-      // très courts (v8+ = milliers de spawns/sec).
-      const targetDuration = 6 + Math.max(0, w.current - 5) * 2;
-      w.spawnInterval = targetDuration / w.totalThisWave;
+      // Spawn interval auto-ajusté, indexé sur le nombre d'unités (pas la
+      // vague) : durée cible = 6s tant que total ≤ 810, puis +2s chaque
+      // fois que le total triple (810→6s, 2430→8s, 7290→10s, 21870→12s…).
+      // Multi-spawn par frame absorbe les intervals très courts.
+      const totalThis = w.totalThisWave;
+      const targetDuration = 6 + Math.max(0, 2 * Math.log(totalThis / 810) / Math.log(3));
+      w.spawnInterval = targetDuration / totalThis;
       w.justClearedAt = null;
     }
     return;
