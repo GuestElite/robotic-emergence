@@ -1984,10 +1984,11 @@ function updateCameraShake(dt) {
 //   - Vagues 7+  : Tier III (×3.10 HP/dmg, ×1.15 speed, ×1.22 range, ×1.40 radius)
 // Par-dessus le tier, scaling fin de +8%/vague (HP & dmg, cumulé).
 //
-// Spawn rapide (0.60s → 0.30s). Vague 1 (~10 unités) dure ~6s, vague 10
-// (~33 unités) ~10s. Fin de vague = queue vide → timer inter-vague de 3s
-// puis vague suivante (même si des unités sont encore vivantes — les
-// restes s'accumulent → pression croissante).
+// Spawn rapide (0.60s → 0.30s). Taille de vague ×3 entre chaque vague
+// (base 10) : v1=10, v2=30, v3=90, v4=250 (cap), v5+=250. Fin de vague
+// = queue vide → timer inter-vague de 3s puis vague suivante (même si
+// des unités sont encore vivantes — les restes s'accumulent → pression
+// croissante).
 //
 // Boss : vagues %5 → heavy ×3 HP / ×2 dmg.
 // Mini-boss : vagues 3, 7, 11… (≥3 et %4===3, sauf si déjà boss) → heavy
@@ -2000,8 +2001,9 @@ function enemyTierForWave(waveNum) {
 
 function buildWaveQueue(waveNum) {
   const queue = [];
-  // Densité : démarre à 8 puis +2.5/vague (vague 5 = 20, vague 10 = 33).
-  const total = 8 + Math.floor(waveNum * 2.5);
+  // Densité : ×3 entre chaque vague (geometric). Base = 10 unités vague 1.
+  // Cap à 250 pour éviter de tuer le framerate côté wave 5+ (10·3^4 = 810 sans cap).
+  const total = Math.min(250, Math.round(10 * Math.pow(3, waveNum - 1)));
   for (let i = 0; i < total; i++) {
     const r = Math.random();
     let typeId;
