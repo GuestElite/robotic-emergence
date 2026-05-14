@@ -472,25 +472,28 @@ const audio = {
     // 1) Si un WAV est chargé pour ce type → on le joue (sons réels)
     const buf = this.wavBuffers[type];
     if (buf) {
-      try {
-        const baseVol = SFX_WAV_VOLUMES[type] != null ? SFX_WAV_VOLUMES[type] : 0.4;
-        // "place" = double frappe forge (tink-CLANG, le 2e hit fait le climax)
-        // Hit 1 à 70% volume = positionnement / Hit 2 à 100% = forge finale.
-        // Décalage 220ms : pas assez serré pour fusionner, pas assez écarté pour
-        // que ça sonne comme 2 events séparés.
-        const hits = (type === "place")
-          ? [{ delay: 0,    volMul: 0.70 },
-             { delay: 0.22, volMul: 1.00 }]
-          : [{ delay: 0,    volMul: 1.00 }];
-        for (const h of hits) {
+      const baseVol = SFX_WAV_VOLUMES[type] != null ? SFX_WAV_VOLUMES[type] : 0.4;
+      // "place" = double frappe forge (tink-CLANG, le 2e hit fait le climax)
+      // Hit 1 à 70% volume = positionnement / Hit 2 à 100% = forge finale.
+      const hits = (type === "place")
+        ? [{ delay: 0,    volMul: 0.70 },
+           { delay: 0.22, volMul: 1.00 }]
+        : [{ delay: 0,    volMul: 1.00 }];
+      for (const h of hits) {
+        try {
           const src = ctx.createBufferSource();
           src.buffer = buf;
           const g = ctx.createGain();
           g.gain.value = baseVol * this.sfxVolume * h.volMul;
           src.connect(g).connect(ctx.destination);
-          src.start(now + h.delay);
+          // ctx.currentTime relu à chaque itération : garantit que start() reçoit
+          // un temps >= currentTime (sinon certaines impls throw RangeError au
+          // lieu de jouer immédiatement, et la boucle entière saute).
+          src.start(ctx.currentTime + h.delay);
+        } catch (e) {
+          console.warn(`[Audio] playSFX("${type}") hit failed:`, e);
         }
-      } catch (_) {}
+      }
       return;
     }
 
