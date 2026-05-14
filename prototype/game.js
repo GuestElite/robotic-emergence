@@ -1960,10 +1960,13 @@ function updateCameraShake(dt) {
 
 // ── MODE VAGUES ─────────────────────────────────────────────────────────
 // L'ennemi n'a aucun bâtiment : à chaque vague, un nombre fixe d'unités
-// spawne directement aux portes du rempart adverse. Quand toutes sont
-// éliminées, la vague suivante démarre (avec une courte pause de 3s ou
-// après un clic Skip). Chaque vague est plus dense ET plus puissante :
-// scaling de stats + composition + boss tous les 5 niveaux.
+// spawne aux portes du rempart adverse, étalé dans le temps (2.0s → 1.0s
+// entre 2 spawns). Dès que toute la queue de la vague est sortie, la
+// vague est "terminée" côté spawn et un timer inter-vague de 10s démarre,
+// indépendamment du nombre d'ennemis encore vivants. Pendant ce timer,
+// AUCUNE unité ennemie n'apparaît. La pression croissante vient (a) de la
+// densité qui monte, (b) des survivants qui se cumulent à la vague
+// suivante si le joueur n'a pas eu le temps de nettoyer.
 function buildWaveQueue(waveNum) {
   const queue = [];
   // Densité : démarre à 6 puis +2 par vague (vague 5 = 14 unités, v10 = 24).
@@ -2046,8 +2049,9 @@ function updateWaveSpawning(dt) {
       w.totalThisWave = w.queue.length;
       w.inWave = true;
       w.spawnTimer = 0;
-      // Spawn rate : démarre à 0.9s entre 2 unités, accélère 5%/vague jusqu'à 0.30s
-      w.spawnInterval = Math.max(0.30, 0.90 - w.current * 0.05);
+      // Spawn rate : démarre à 2.0s entre 2 unités, accélère 0.10s/vague jusqu'à 1.0s.
+      // Vagues étalées plusieurs secondes → laisse au joueur le temps de réagir.
+      w.spawnInterval = Math.max(1.0, 2.0 - (w.current - 1) * 0.10);
       w.justClearedAt = null;
     }
     return;
@@ -2061,22 +2065,21 @@ function updateWaveSpawning(dt) {
     }
     return;
   }
-  // Toutes spawnées : on attend la mort du dernier ennemi pour clore la vague
-  const enemiesAlive = game.units.some((u) => u.side === "enemy" && u.hp > 0 && !u.stationary);
-  if (!enemiesAlive) {
-    w.defeated = w.current;
-    // Bonus monnaie : 100 + 25/vague (10 fois plus généreux qu'avant)
-    const bonus = 100 + w.current * 25;
-    game.player.money += bonus;
-    spawnDamageNumber({ x: 200, y: CONFIG.HUD_H + 60, side: "player", stats: { radius: 0 } }, bonus, true);
-    triggerCameraShake(0.6, 0.25);
-    w.lastBonus = bonus;
-    w.current++;
-    w.inWave = false;
-    // Pause auto plus courte (3s) — le joueur peut Skip via clic
-    w.betweenWaves = 3;
-    w.justClearedAt = performance.now();
-  }
+  // Toutes spawnées : on clôt immédiatement la vague (sans attendre la mort
+  // des unités encore en jeu) et on déclenche le timer inter-vague. La
+  // prochaine vague démarre dans betweenWaves secondes, peu importe l'état du
+  // terrain — les restes éventuels viennent se cumuler à la suivante, ce qui
+  // crée la pression croissante voulue.
+  w.defeated = w.current;
+  const bonus = 100 + w.current * 25;
+  game.player.money += bonus;
+  spawnDamageNumber({ x: 200, y: CONFIG.HUD_H + 60, side: "player", stats: { radius: 0 } }, bonus, true);
+  triggerCameraShake(0.6, 0.25);
+  w.lastBonus = bonus;
+  w.current++;
+  w.inWave = false;
+  w.betweenWaves = 10;
+  w.justClearedAt = performance.now();
 }
 
 // Skip la pause d'inter-vague (déclenche immédiatement la prochaine vague).
@@ -2108,11 +2111,13 @@ function drawWaveOverlay(ctx) {
   });
 
   // Header : numéro vague + état
+  // La vague est gouvernée par le SPAWN (pas les kills) : la barre reflète
+  // combien d'unités de la vague ont déjà spawn.
   const aliveCount = game.units.filter((u) => u.side === "enemy" && u.hp > 0 && !u.stationary).length;
   const total = w.totalThisWave || 0;
-  const remaining = w.queue.length + aliveCount;
-  const killed = Math.max(0, total - remaining);
-  const ratio = total > 0 ? killed / total : 0;
+  const toSpawn = w.queue.length;
+  const spawned = Math.max(0, total - toSpawn);
+  const ratio = total > 0 ? spawned / total : 0;
   const hasBoss = w.queue.some((s) => s?.isBoss) || game.units.some((u) => u.isBoss && u.side === "enemy" && u.hp > 0);
 
   ctx.fillStyle = "#fff";
@@ -2152,9 +2157,7 @@ function drawWaveOverlay(ctx) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   if (w.inWave) {
-    const status = w.queue.length > 0
-      ? `${killed} / ${total} kills · ${w.queue.length} à spawn · ${aliveCount} en jeu`
-      : `${killed} / ${total} kills · ${aliveCount} restants — élimine-les pour la suite`;
+    const status = `${spawned} / ${total} spawn · ${aliveCount} en jeu`;
     ctx.fillText(status, barX + barW / 2, barY + barH / 2);
   } else {
     const sec = Math.max(0, Math.ceil(w.betweenWaves));
