@@ -943,6 +943,235 @@ def render_factory_air_t3(side, pal=None):
 
 
 # ===========================================================================
+# MEDIC T2/T3 — Hôpital de campagne (T2) → Centre médical méga (T3)
+# Conserve l'identité visuelle médicale : panneaux blancs + croix verte + halo
+# ===========================================================================
+
+MED_WHITE      = (243, 244, 246, 255)
+MED_WHITE_DARK = (209, 213, 219, 255)
+MED_CROSS      = ( 34, 197,  94, 255)
+MED_CROSS_DARK = ( 21, 128,  61, 255)
+MED_CROSS_GLOW = (134, 239, 172, 255)
+
+
+def _med_cross(d, cx, cy, arm_len, arm_thick, fill=MED_CROSS, outline=None):
+    """Croix médicale centrée en (cx, cy)."""
+    d.rectangle((cx - arm_len, cy - arm_thick, cx + arm_len, cy + arm_thick),
+                fill=fill, outline=outline)
+    d.rectangle((cx - arm_thick, cy - arm_len, cx + arm_thick, cy + arm_len),
+                fill=fill, outline=outline)
+
+
+def _med_halo(img, cx, cy, rx, ry, color=MED_CROSS_GLOW, alpha=110, width=3,
+              blur_radius=3):
+    """Halo de soin diffus autour de (cx, cy). Modifie img in-place via composite."""
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    ld.ellipse((cx - rx, cy - ry, cx + rx, cy + ry),
+               outline=(color[0], color[1], color[2], alpha), width=width)
+    ld.ellipse((cx - int(rx * 0.85), cy - int(ry * 0.85),
+                cx + int(rx * 0.85), cy + int(ry * 0.85)),
+               outline=(color[0], color[1], color[2], int(alpha * 0.6)), width=max(1, width - 1))
+    layer = layer.filter(ImageFilter.GaussianBlur(blur_radius))
+    return Image.alpha_composite(img, layer)
+
+
+def render_factory_medic_t2(side, pal=None):
+    """Hôpital de campagne : 2 baies médicales + zone triage centrale (256×128).
+    Identité : panneaux blancs, croix verte géante au centre, halo, accents cyan."""
+    W, H = 256, 128
+    if pal is None:
+        pal = side_palette(side)
+    img, d = new_canvas(W, H)
+
+    # ── Plateforme globale
+    d.rounded_rectangle((4, 6, W - 4, H - 4), radius=12,
+                        fill=METAL["darkest"], outline=ACCENT["outline"])
+    d.rounded_rectangle((4, 6, W - 4, 10), radius=10, fill=METAL["dark"])
+
+    # ── 2 baies blanches (médicales) + zone triage centrale
+    bay_w = 88
+    bay_left  = (12, 14, 12 + bay_w, H - 12)
+    bay_right = (W - 12 - bay_w, 14, W - 12, H - 12)
+    triage    = (12 + bay_w, 14, W - 12 - bay_w, H - 12)
+
+    # Baies — panneaux blancs avec liseré camp coloré
+    for bay in (bay_left, bay_right):
+        shaded_rect_3d(d, bay, pal_dark=MED_WHITE_DARK,
+                       pal_base=MED_WHITE, pal_light=ACCENT["white"], radius=4)
+        d.rounded_rectangle(bay, radius=4, outline=pal["base"], width=2)
+        # Rivets aux coins
+        rivets_corners(d, bay, METAL["darkest"], r=1)
+        # Mini-croix dans chaque baie
+        bcx = (bay[0] + bay[2]) // 2
+        bcy = (bay[1] + bay[3]) // 2
+        _med_cross(d, bcx, bcy, arm_len=12, arm_thick=4,
+                   fill=MED_CROSS, outline=ACCENT["outline"])
+        d.line((bcx - 12, bcy - 4, bcx + 12, bcy - 4), fill=MED_CROSS_GLOW)
+
+    # Zone triage centrale (plus sombre, technique)
+    d.rounded_rectangle(triage, radius=3,
+                        fill=METAL["dark"], outline=ACCENT["outline"])
+    d.rounded_rectangle((triage[0] + 1, triage[1] + 1,
+                         triage[2] - 1, triage[1] + 14),
+                        radius=2, fill=METAL["base"])
+    diag_warning_stripes(d, (triage[0], triage[1],
+                              triage[2], triage[1] + 8), MED_CROSS)
+
+    # Grosse croix verte au centre de la zone triage
+    cx_tri = (triage[0] + triage[2]) // 2
+    cy_tri = (triage[1] + triage[3]) // 2 + 4
+    _med_cross(d, cx_tri, cy_tri, arm_len=20, arm_thick=6,
+               fill=MED_CROSS, outline=ACCENT["outline"])
+    # Reflets sur la croix
+    d.line((cx_tri - 20, cy_tri - 6, cx_tri + 20, cy_tri - 6), fill=MED_CROSS_GLOW)
+    d.line((cx_tri - 6, cy_tri - 20, cx_tri - 6, cy_tri + 20), fill=MED_CROSS_DARK)
+
+    # LED strip cyan en haut (signature T2 commune à toutes les factories)
+    led_y = 12
+    d.line((bay_left[0] + 4, led_y, bay_right[2] - 4, led_y),
+           fill=TIER2_ACCENT, width=1)
+    d.line((bay_left[0] + 4, led_y + 1, bay_right[2] - 4, led_y + 1),
+           fill=TIER2_ACCENT_DIM, width=1)
+
+    # Vents de refroidissement
+    vent_grille(d, bay_left[0] + 4, bay_left[3] - 22, 16, 10, TIER2_ACCENT_DIM)
+    vent_grille(d, bay_right[2] - 20, bay_right[3] - 22, 16, 10, TIER2_ACCENT_DIM)
+
+    # Tourelles défensives (1 par baie)
+    turret_3d(d, bay_left[0] + bay_w // 2, bay_left[1] + 12, 7, pal,
+              accent_color=TIER2_ACCENT)
+    turret_3d(d, bay_right[0] + bay_w // 2, bay_right[1] + 12, 7, pal,
+              accent_color=TIER2_ACCENT)
+
+    # Antennes vertes (médicales) sur les baies + centrale
+    antenna_3d(d, bay_left[0] + 8, bay_left[1] + 4, 11, MED_CROSS_GLOW)
+    antenna_3d(d, bay_left[2] - 8, bay_left[1] + 4, 11, MED_CROSS_GLOW)
+    antenna_3d(d, bay_right[0] + 8, bay_right[1] + 4, 11, MED_CROSS_GLOW)
+    antenna_3d(d, bay_right[2] - 8, bay_right[1] + 4, 11, MED_CROSS_GLOW)
+    antenna_3d(d, cx_tri, triage[1] + 4, 14, MED_CROSS_GLOW)
+
+    # Rivets cyan aux 4 coins
+    rivets_corners(d, (4, 6, W - 4, H - 4), TIER2_ACCENT, r=2)
+
+    # 2 gates (une par baie)
+    make_gates_t2(d, side, W, H, (bay_left, bay_right), MED_CROSS_GLOW)
+
+    # Cadre cyan global
+    d.rounded_rectangle((6, 8, W - 6, H - 6), radius=10,
+                        outline=TIER2_ACCENT, width=1)
+
+    # Halo de soin diffus autour de la croix centrale
+    img = _med_halo(img, cx_tri, cy_tri, rx=44, ry=32,
+                    color=MED_CROSS_GLOW, alpha=110, width=3, blur_radius=3)
+
+    return drop_shadow(img, offset=(3, 4), blur=5, opacity=120)
+
+
+def render_factory_medic_t3(side, pal=None):
+    """Centre médical méga : 4 wings autour d'une croix géante centrale (256×256).
+    Identité : croix verte massive au centre, halos pulsants, gates aux 4 côtés."""
+    W = H = 256
+    if pal is None:
+        pal = side_palette(side)
+    img, d = new_canvas(W, H)
+    cx, cy = W // 2, H // 2
+
+    # Plateforme massive
+    d.rounded_rectangle((4, 6, W - 4, H - 4), radius=14,
+                        fill=METAL["darkest"], outline=ACCENT["outline"])
+    d.rounded_rectangle((10, 12, W - 10, H - 10), radius=10,
+                        fill=METAL["dark"], outline=ACCENT["outline"])
+
+    # 4 wings médicaux (panneaux blancs) en croix
+    wing_w, wing_h = 76, 56
+    wings = [
+        # (x0, y0, x1, y1)
+        (cx - wing_w // 2, 18, cx + wing_w // 2, 18 + wing_h),                 # top
+        (cx - wing_w // 2, H - 18 - wing_h, cx + wing_w // 2, H - 18),         # bottom
+        (18, cy - wing_h // 2, 18 + wing_w, cy + wing_h // 2),                 # left
+        (W - 18 - wing_w, cy - wing_h // 2, W - 18, cy + wing_h // 2),         # right
+    ]
+    for wing in wings:
+        shaded_rect_3d(d, wing, pal_dark=MED_WHITE_DARK,
+                       pal_base=MED_WHITE, pal_light=ACCENT["white"], radius=5)
+        d.rounded_rectangle(wing, radius=5, outline=pal["base"], width=2)
+        rivets_corners(d, wing, METAL["darkest"], r=1)
+        wcx = (wing[0] + wing[2]) // 2
+        wcy = (wing[1] + wing[3]) // 2
+        _med_cross(d, wcx, wcy, arm_len=14, arm_thick=4,
+                   fill=MED_CROSS, outline=ACCENT["outline"])
+        d.line((wcx - 14, wcy - 4, wcx + 14, wcy - 4), fill=MED_CROSS_GLOW)
+
+    # Dôme central : opération / triage central — disque blanc avec croix géante
+    dome_r = 46
+    d.ellipse((cx - dome_r - 2, cy - dome_r - 2, cx + dome_r + 2, cy + dome_r + 2),
+              fill=METAL["dark"], outline=ACCENT["outline"], width=2)
+    d.ellipse((cx - dome_r, cy - dome_r, cx + dome_r, cy + dome_r),
+              fill=MED_WHITE, outline=ACCENT["outline"], width=2)
+    d.ellipse((cx - dome_r + 4, cy - dome_r + 4, cx + dome_r - 4, cy + dome_r - 4),
+              outline=TIER3_ACCENT, width=1)
+
+    # Croix verte géante au centre
+    _med_cross(d, cx, cy, arm_len=34, arm_thick=10,
+               fill=MED_CROSS, outline=ACCENT["outline"])
+    # Reflets sur la croix
+    d.line((cx - 34, cy - 10, cx + 34, cy - 10), fill=MED_CROSS_GLOW)
+    d.line((cx - 10, cy - 34, cx - 10, cy + 34), fill=MED_CROSS_GLOW)
+    d.line((cx - 34, cy + 10, cx + 34, cy + 10), fill=MED_CROSS_DARK)
+
+    # 8 LEDs autour du dôme
+    for i in range(8):
+        ang = math.radians(i * 45 + 22)
+        lx = cx + math.cos(ang) * (dome_r - 4)
+        ly = cy + math.sin(ang) * (dome_r - 4)
+        d.ellipse((lx - 2, ly - 2, lx + 2, ly + 2), fill=MED_CROSS_GLOW)
+        d.ellipse((lx - 1, ly - 1, lx, ly), fill=ACCENT["white"])
+
+    # Lignes "couloirs" connectant les wings au dôme central
+    for wing in wings:
+        wcx = (wing[0] + wing[2]) // 2
+        wcy = (wing[1] + wing[3]) // 2
+        d.line((wcx, wcy, cx, cy), fill=MED_CROSS_DARK, width=1)
+
+    # Tourelles défensives entre les wings (4 angles)
+    for tx, ty in [(48, 48), (W - 48, 48), (48, H - 48), (W - 48, H - 48)]:
+        turret_3d(d, tx, ty, 8, pal, accent_color=TIER3_ACCENT)
+
+    # Antennes vertes (médicales) aux coins
+    antenna_3d(d, 18, 18, 14, MED_CROSS_GLOW)
+    antenna_3d(d, W - 18, 18, 14, MED_CROSS_GLOW)
+    antenna_3d(d, 18, H - 18, 12, MED_CROSS_GLOW)
+    antenna_3d(d, W - 18, H - 18, 12, MED_CROSS_GLOW)
+
+    # Cadre or premium + rivets or
+    d.rounded_rectangle((6, 8, W - 6, H - 6), radius=12, outline=TIER3_ACCENT, width=2)
+    d.rounded_rectangle((9, 11, W - 9, H - 9), radius=10, outline=TIER3_ACCENT_DIM, width=1)
+    rivets_corners(d, (6, 8, W - 6, H - 6), TIER3_ACCENT, r=3)
+
+    # 4 gates (une à chaque côté, devant chaque wing)
+    if side == "player":
+        gate_at(d, side, cx, H - 16, H - 4, MED_CROSS_GLOW)
+    else:
+        gate_at(d, side, cx, 4, 16, MED_CROSS_GLOW)
+    # Gates latérales (gauche / droite) — orientation différente
+    for gx_y in [(20, cy), (W - 20, cy)]:
+        gx, gy = gx_y
+        d.rectangle((gx - 6, gy - 11, gx + 6, gy + 11),
+                    fill=METAL["darkest"], outline=ACCENT["outline"])
+        d.rectangle((gx - 4, gy - 8, gx + 4, gy + 8), fill=MED_CROSS_GLOW)
+        d.ellipse((gx - 1, gy - 1, gx + 1, gy + 1), fill=ACCENT["white"])
+
+    # Halo de soin massif autour de la croix centrale
+    img = _med_halo(img, cx, cy, rx=72, ry=72,
+                    color=MED_CROSS_GLOW, alpha=140, width=3, blur_radius=4)
+    img = _med_halo(img, cx, cy, rx=92, ry=92,
+                    color=MED_CROSS_GLOW, alpha=80, width=2, blur_radius=5)
+
+    return drop_shadow(img, offset=(4, 5), blur=6, opacity=130)
+
+
+# ===========================================================================
 # PREVIEW COMPARATIF — 5 types × 3 tiers
 # ===========================================================================
 

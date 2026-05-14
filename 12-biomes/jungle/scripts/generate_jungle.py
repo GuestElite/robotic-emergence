@@ -27,6 +27,7 @@ from palette import new_canvas, drop_shadow, vertical_gradient, METAL, ACCENT
 from generate_sprites import (
     render_unit_light, render_unit_heavy,
     render_unit_swarmer, render_unit_sniper, render_unit_air,
+    render_unit_medic, render_factory_medic,
 )
 
 
@@ -894,6 +895,20 @@ def main():
         ("unit-swarmer-enemy-t2.png",  lambda: render_unit_swarmer("enemy", 2, ENEMY_JUNGLE_T2)),
         ("unit-sniper-enemy-t2.png",   lambda: render_unit_sniper("enemy", 2, ENEMY_JUNGLE_T2)),
         ("unit-air-enemy-t2.png",      lambda: render_unit_air("enemy", 2, ENEMY_JUNGLE_T2)),
+        # === Médic K9 jungle — factory + 4 frames × 3 tiers (T0/T1/T2) ===
+        ("factory-medic-enemy.png",    lambda: render_factory_medic("enemy", pal_override=ENEMY_JUNGLE)),
+        ("unit-medic-enemy-0.png",     lambda: render_unit_medic("enemy", 0, 0, ENEMY_JUNGLE)),
+        ("unit-medic-enemy-1.png",     lambda: render_unit_medic("enemy", 1, 0, ENEMY_JUNGLE)),
+        ("unit-medic-enemy-2.png",     lambda: render_unit_medic("enemy", 2, 0, ENEMY_JUNGLE)),
+        ("unit-medic-enemy-3.png",     lambda: render_unit_medic("enemy", 3, 0, ENEMY_JUNGLE)),
+        ("unit-medic-enemy-t1-0.png",  lambda: render_unit_medic("enemy", 0, 1, ENEMY_JUNGLE_T1)),
+        ("unit-medic-enemy-t1-1.png",  lambda: render_unit_medic("enemy", 1, 1, ENEMY_JUNGLE_T1)),
+        ("unit-medic-enemy-t1-2.png",  lambda: render_unit_medic("enemy", 2, 1, ENEMY_JUNGLE_T1)),
+        ("unit-medic-enemy-t1-3.png",  lambda: render_unit_medic("enemy", 3, 1, ENEMY_JUNGLE_T1)),
+        ("unit-medic-enemy-t2-0.png",  lambda: render_unit_medic("enemy", 0, 2, ENEMY_JUNGLE_T2)),
+        ("unit-medic-enemy-t2-1.png",  lambda: render_unit_medic("enemy", 1, 2, ENEMY_JUNGLE_T2)),
+        ("unit-medic-enemy-t2-2.png",  lambda: render_unit_medic("enemy", 2, 2, ENEMY_JUNGLE_T2)),
+        ("unit-medic-enemy-t2-3.png",  lambda: render_unit_medic("enemy", 3, 2, ENEMY_JUNGLE_T2)),
     ]
 
     for name, fn in to_render:

@@ -948,6 +948,8 @@ const SPRITE_FILES = [
   "factory-sniper-player-t3",  "factory-sniper-enemy-t3",
   "factory-air-player-t2",     "factory-air-enemy-t2",
   "factory-air-player-t3",     "factory-air-enemy-t3",
+  "factory-medic-player-t2",   "factory-medic-enemy-t2",
+  "factory-medic-player-t3",   "factory-medic-enemy-t3",
   "unit-light-player",
   "unit-light-enemy",
   "unit-heavy-player",
@@ -964,6 +966,15 @@ const SPRITE_FILES = [
   "unit-medic-player-2", "unit-medic-player-3",
   "unit-medic-enemy-0", "unit-medic-enemy-1",
   "unit-medic-enemy-2", "unit-medic-enemy-3",
+  // Médic skins T1/T2 : 4 frames × 2 camps × 2 tiers
+  "unit-medic-player-t1-0", "unit-medic-player-t1-1",
+  "unit-medic-player-t1-2", "unit-medic-player-t1-3",
+  "unit-medic-player-t2-0", "unit-medic-player-t2-1",
+  "unit-medic-player-t2-2", "unit-medic-player-t2-3",
+  "unit-medic-enemy-t1-0", "unit-medic-enemy-t1-1",
+  "unit-medic-enemy-t1-2", "unit-medic-enemy-t1-3",
+  "unit-medic-enemy-t2-0", "unit-medic-enemy-t2-1",
+  "unit-medic-enemy-t2-2", "unit-medic-enemy-t2-3",
   // === Skins boutique : tier 1 (Rare) + tier 2 (Epic), player + enemy ===
   // Player skins (mêmes sprites tous biomes — le player garde sa famille bleue)
   "unit-light-player-t1", "unit-light-player-t2",
@@ -1175,6 +1186,14 @@ const BIOME_SPECIFIC_SPRITES = new Set([
   "factory-swarmer-enemy-t2", "factory-swarmer-enemy-t3",
   "factory-sniper-enemy-t2", "factory-sniper-enemy-t3",
   "factory-air-enemy-t2", "factory-air-enemy-t3",
+  // Médic enemy — factory + 4 frames × 3 tiers (T0/T1/T2) biome-specific
+  "factory-medic-enemy", "factory-medic-enemy-t2", "factory-medic-enemy-t3",
+  "unit-medic-enemy-0", "unit-medic-enemy-1",
+  "unit-medic-enemy-2", "unit-medic-enemy-3",
+  "unit-medic-enemy-t1-0", "unit-medic-enemy-t1-1",
+  "unit-medic-enemy-t1-2", "unit-medic-enemy-t1-3",
+  "unit-medic-enemy-t2-0", "unit-medic-enemy-t2-1",
+  "unit-medic-enemy-t2-2", "unit-medic-enemy-t2-3",
 ]);
 
 // Couleur du gradient peint sur le sol par biome (rgba semi-transparent).
@@ -4173,24 +4192,9 @@ function drawHoverRange(ctx) {
 // équipé par le joueur (T1/T2 — sprite avec ajouts physiques baked-in).
 // Tomb sur unit-{type}-{side}.png par défaut si pas de skin ou sprite manquant.
 function unitSpriteNameFor(u) {
-  // Médic : 4 frames d'animation cyclées (~10 fps) tant que l'unité bouge.
-  // Quand statique (en mode défense rallié, ou aucun déplacement entre 2 frames),
-  // on revient à la frame 0 (pose neutre) pour éviter le "court sur place".
-  if (u.typeId === "medic") {
-    const moved = u._prevX != null &&
-                  (Math.abs(u.x - u._prevX) > 0.05 || Math.abs(u.y - u._prevY) > 0.05);
-    u._prevX = u.x;
-    u._prevY = u.y;
-    const frameIdx = moved ? Math.floor((game.time || 0) * 10) % 4 : 0;
-    return `unit-medic-${u.side}-${frameIdx}`;
-  }
-  const baseName = `unit-${u.typeId}-${u.side}`;
-  // Le skin par unité est propre à chaque compte. Il faut donc savoir
-  // quel skin appliquer à QUI.
-  // - Solo : seul le côté "player" (= moi) a un skin équipé.
-  // - MP host : "player" = moi (mes skins), "enemy" = guest (ses skins reçus).
-  // - MP guest : "enemy" = moi (mes skins), "player" = host (ses skins reçus).
-  // - Spectator : on n'applique aucun skin perso (on regarde, pas la peine).
+  // Résolution du tier de skin selon mode/rôle/side (commun médic + autres unités).
+  // Solo : seul "player" = moi a un skin. MP : host/guest miroir.
+  // Spectator : pas de skin (on n'a pas l'équipement des deux peers).
   let tier = null;
   const myEquipped = window.RE_AUTH?.equippedSkins || {};
   const peerEquipped = game.mp?.peerEquippedSkins || {};
@@ -4202,11 +4206,25 @@ function unitSpriteNameFor(u) {
       if (u.side === "enemy") tier = myEquipped[u.typeId];
       else if (u.side === "player") tier = peerEquipped[u.typeId];
     }
-    // Spectateur : pas de skin appliqué (on n'a pas l'équipement des deux peers)
   } else {
-    // Solo : seul mon côté "player" a un skin
     if (u.side === "player") tier = myEquipped[u.typeId];
   }
+
+  // Médic : 4 frames d'animation cyclées (~10 fps) tant que l'unité bouge.
+  // Quand statique, frame 0 (pose neutre) pour éviter le "court sur place".
+  if (u.typeId === "medic") {
+    const moved = u._prevX != null &&
+                  (Math.abs(u.x - u._prevX) > 0.05 || Math.abs(u.y - u._prevY) > 0.05);
+    u._prevX = u.x;
+    u._prevY = u.y;
+    const frameIdx = moved ? Math.floor((game.time || 0) * 10) % 4 : 0;
+    const baseName = `unit-medic-${u.side}-${frameIdx}`;
+    if (!tier) return baseName;
+    const tieredName = `unit-medic-${u.side}-t${tier}-${frameIdx}`;
+    return sprites[tieredName] ? tieredName : baseName;
+  }
+
+  const baseName = `unit-${u.typeId}-${u.side}`;
   if (!tier) return baseName;
   const tieredName = `${baseName}-t${tier}`;
   return sprites[tieredName] ? tieredName : baseName;

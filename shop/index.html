@@ -219,11 +219,22 @@
       swarmer: { label: "Swarmer", emoji: "🐛", description: "Insectoïde rapide, spam léger" },
       sniper:  { label: "Sniper",  emoji: "🎯", description: "Longue portée, anti-air, dégâts lourds" },
       air:     { label: "Air",     emoji: "✈️", description: "Drone aérien, survole les défenses" },
+      medic:   { label: "Médic K9", emoji: "⚕️", description: "Chien robotique soigneur, suit les alliés blessés" },
     };
-    const UNIT_ORDER = ["light", "heavy", "swarmer", "sniper", "air"];
+    const UNIT_ORDER = ["light", "heavy", "swarmer", "sniper", "air", "medic"];
 
+    // Le médic a 4 frames d'animation (0-3) ; on affiche la frame 0 (pose neutre).
     function spriteUrlFor(unit_type, tier) {
+      if (unit_type === "medic") {
+        return `/08-art-direction/sprites/unit-medic-player-t${tier}-0.png`;
+      }
       return `/08-art-direction/sprites/unit-${unit_type}-player-t${tier}.png`;
+    }
+
+    // Idem pour la mini-icône d'en-tête de section unité.
+    function unitIconUrlFor(unit_type) {
+      if (unit_type === "medic") return `/08-art-direction/sprites/unit-medic-player-0.png`;
+      return `/08-art-direction/sprites/unit-${unit_type}-player.png`;
     }
 
     // ─── Rendu Skins d'unité ────────────────────────────────────────
@@ -248,7 +259,7 @@
         section.className = "unit-section";
         section.innerHTML = `
           <h2>
-            <img class="unit-icon" src="/08-art-direction/sprites/unit-${unitType}-player.png" alt="" />
+            <img class="unit-icon" src="${unitIconUrlFor(unitType)}" alt="" />
             ${meta.emoji} ${meta.label}
             <span class="muted small" style="font-weight: 400; font-size: 12px;">— ${meta.description}</span>
           </h2>

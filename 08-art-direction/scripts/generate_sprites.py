@@ -1201,11 +1201,13 @@ def _medic_render_leg(d, base_x, base_y, x_off, y_off, is_far=False):
               fill=paw_col, outline=ACCENT["outline"] if not is_far else None)
 
 
-def render_unit_medic(side: str, frame: int = 0, pal_override: dict = None) -> Image.Image:
-    """Médic K9 quadrupède en vue 3/4. `frame` ∈ [0, 3] pour le cycle de course."""
+def render_unit_medic(side: str, frame: int = 0, tier: int = 0, pal_override: dict = None) -> Image.Image:
+    """Médic K9 quadrupède en vue 3/4. `frame` ∈ [0, 3] pour le cycle de course.
+    `tier` ∈ {0, 1, 2} sélectionne la skin (Common/Steel/Royal Blue). pal_override
+    écrase la palette dérivée (utilisé pour les variants biomes)."""
     frame = max(0, min(3, int(frame)))
     W = H = 48
-    pal = pal_override if pal_override is not None else side_palette(side, 0)
+    pal = pal_override if pal_override is not None else side_palette(side, tier)
     img, d = new_canvas(W, H)
     cx, cy = W // 2, H // 2
     body_y_off = _MEDIC_BODY_Y_BOB[frame]
@@ -1416,6 +1418,23 @@ SPRITES = [
     ("unit-medic-enemy-1.png",   render_unit_medic,     ("enemy", 1)),
     ("unit-medic-enemy-2.png",   render_unit_medic,     ("enemy", 2)),
     ("unit-medic-enemy-3.png",   render_unit_medic,     ("enemy", 3)),
+    # === Médic skins T1/T2 — 4 frames × 2 camps × 2 tiers = 16 sprites ===
+    ("unit-medic-player-t1-0.png", render_unit_medic,   ("player", 0, 1)),
+    ("unit-medic-player-t1-1.png", render_unit_medic,   ("player", 1, 1)),
+    ("unit-medic-player-t1-2.png", render_unit_medic,   ("player", 2, 1)),
+    ("unit-medic-player-t1-3.png", render_unit_medic,   ("player", 3, 1)),
+    ("unit-medic-player-t2-0.png", render_unit_medic,   ("player", 0, 2)),
+    ("unit-medic-player-t2-1.png", render_unit_medic,   ("player", 1, 2)),
+    ("unit-medic-player-t2-2.png", render_unit_medic,   ("player", 2, 2)),
+    ("unit-medic-player-t2-3.png", render_unit_medic,   ("player", 3, 2)),
+    ("unit-medic-enemy-t1-0.png",  render_unit_medic,   ("enemy", 0, 1)),
+    ("unit-medic-enemy-t1-1.png",  render_unit_medic,   ("enemy", 1, 1)),
+    ("unit-medic-enemy-t1-2.png",  render_unit_medic,   ("enemy", 2, 1)),
+    ("unit-medic-enemy-t1-3.png",  render_unit_medic,   ("enemy", 3, 1)),
+    ("unit-medic-enemy-t2-0.png",  render_unit_medic,   ("enemy", 0, 2)),
+    ("unit-medic-enemy-t2-1.png",  render_unit_medic,   ("enemy", 1, 2)),
+    ("unit-medic-enemy-t2-2.png",  render_unit_medic,   ("enemy", 2, 2)),
+    ("unit-medic-enemy-t2-3.png",  render_unit_medic,   ("enemy", 3, 2)),
     ("tile-wall.png",            render_tile_wall,      ()),
     ("effect-explosion.png",     render_effect_explosion, ()),
     ("effect-laser.png",         render_effect_laser,   ()),

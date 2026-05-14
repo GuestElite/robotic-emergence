@@ -40,6 +40,7 @@ from preview_factories_all_tiers import (
     render_factory_swarmer_t2, render_factory_swarmer_t3,
     render_factory_sniper_t2, render_factory_sniper_t3,
     render_factory_air_t2, render_factory_air_t3,
+    render_factory_medic_t2, render_factory_medic_t3,
 )
 from preview_factory_light_tiers import (
     render_factory_light_t2, render_factory_light_t3,
@@ -52,6 +53,7 @@ RENDER_FNS = {
     "swarmer": (render_factory_swarmer_t2, render_factory_swarmer_t3),
     "sniper":  (render_factory_sniper_t2,  render_factory_sniper_t3),
     "air":     (render_factory_air_t2,     render_factory_air_t3),
+    "medic":   (render_factory_medic_t2,   render_factory_medic_t3),
 }
 
 
