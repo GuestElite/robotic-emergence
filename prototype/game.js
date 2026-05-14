@@ -387,6 +387,7 @@ const SFX_WAV_FILES = {
   "death":         "unit-death.wav",
   "crash":         "unit-crash-rampart.wav",
   "lightning":     "effect-lightning.wav",
+  "place":         "factory-place.wav",
 };
 
 const SFX_WAV_VOLUMES = {
@@ -398,6 +399,7 @@ const SFX_WAV_VOLUMES = {
   "death":         0.45,
   "crash":         0.70,  // boom — laisser claquer
   "lightning":     0.65,
+  "place":         0.55,  // forge clang — punchy mais pas écrasant
 };
 
 // Tracks de menu disponibles dans le dropdown top-left.
@@ -462,6 +464,7 @@ const audio = {
     let minGap = 0.06;
     if (type === "explosion" || type === "crash" || type === "lightning") minGap = 0.18;
     else if (type === "death") minGap = 0.08;
+    else if (type === "place") minGap = 0.22;  // forge clang dure ~570ms, espacer
     if (this.lastSfxTime[type] && now - this.lastSfxTime[type] < minGap) return;
     this.lastSfxTime[type] = now;
 

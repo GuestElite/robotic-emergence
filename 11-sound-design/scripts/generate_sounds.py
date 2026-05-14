@@ -364,6 +364,58 @@ def sfx_ambient_snow(duration: float = 30.0):
     return [math.tanh(s) for s in out]
 
 
+def sfx_factory_place():
+    """Forge clang — métal frappé sur l'enclume au moment de poser une factory.
+
+    Composition :
+    - Pré-frappe (60ms) : whoosh court de marteau qui descend (noise lowpass + decay)
+    - Strike (~10ms) : impact broadband + thump basse 75 Hz pour le poids
+    - Anneau métallique (420ms) : 4 sines inharmoniques (520/880/1380/2240 Hz)
+      avec decay différents → "TIIINNNG" métal qui résonne
+    - Workshop tail : court écho 90ms pour suggérer l'espace de la forge
+    """
+    # Pré-frappe : whoosh (le marteau qui descend)
+    pre = noise(0.060, amp=0.30, seed=42)
+    pre = lowpass(pre, window=6)
+    pre = exp_decay(pre, decay_rate=8)
+
+    # Strike : noise broadband + thump grave pour le poids de l'impact
+    strike_noise = noise(0.012, amp=0.85, seed=7)
+    strike_noise = lowpass(strike_noise, window=3)
+    thump = sine(75, 0.090, amp=0.78)
+    thump = exp_decay(thump, decay_rate=12)
+
+    # Anneau métallique — fréquences inharmoniques (ratio non-entier = METAL, pas cloche)
+    ring_dur = 0.42
+    f1 = sine(520,  ring_dur, amp=0.42); f1 = exp_decay(f1, decay_rate=5)
+    f2 = sine(880,  ring_dur, amp=0.32); f2 = exp_decay(f2, decay_rate=6.5)
+    f3 = sine(1380, ring_dur, amp=0.22); f3 = exp_decay(f3, decay_rate=8)
+    f4 = sine(2240, ring_dur, amp=0.14); f4 = exp_decay(f4, decay_rate=12)
+    ring = mix(f1, f2, f3, f4)
+
+    # Assemblage temporel : pre → (strike + ring) qui démarrent à la fin du pre
+    pre_len = len(pre)
+    total_len = pre_len + len(ring)
+
+    def _pad_at(samples, start_offset):
+        return [0.0] * start_offset + samples + [0.0] * (total_len - start_offset - len(samples))
+
+    pre_pad    = _pad_at(pre, 0)
+    strike_pad = _pad_at(strike_noise, pre_len)
+    thump_pad  = _pad_at(thump, pre_len)
+    ring_pad   = _pad_at(ring, pre_len)
+
+    full = mix(pre_pad, strike_pad, thump_pad, ring_pad)
+
+    # Workshop echo (court, suggère un atelier)
+    full = delay(full, delay_s=0.090, feedback=0.25, mix_amount=0.28)
+
+    # Soft clip pour éviter le clipping dur
+    full = [math.tanh(s * 0.85) for s in full]
+
+    return envelope_ad(full, attack_s=0.001, release_s=0.12)
+
+
 def sfx_effect_lightning():
     """Foudre : crack initial + rumble basse profond + queue longue, ~1.5s."""
     # Crack initial (court mais punchy)
@@ -499,6 +551,7 @@ def main():
         ("unit-air-shoot.wav",       sfx_unit_air_shoot),
         ("unit-death.wav",           sfx_unit_death),
         ("unit-crash-rampart.wav",   sfx_unit_crash_rampart),
+        ("factory-place.wav",        sfx_factory_place),
         ("effect-lightning.wav",     sfx_effect_lightning),
         # Ambient par biome (boucles 30s, fade in/out propre pour loop seamless)
         ("ambient-desert.wav",       lambda: sfx_ambient_desert(30.0)),
