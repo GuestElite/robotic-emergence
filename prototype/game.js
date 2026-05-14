@@ -3560,10 +3560,16 @@ function gameLoop(timestamp) {
     console.error("[update]", e);
   }
   ctx.clearRect(0, 0, CONFIG.CANVAS_W, CONFIG.H);
-  // Rendu 3D du biome WebGL (sol + props) avant le 2D — il occupe le canvas
-  // dédié sous le 2D, à la même position. Le coût est nul si non actif.
+  // Rendu 3D du biome WebGL avant le 2D : sync de l'état du jeu vers les
+  // meshes (unités, factories) puis rendu de la scène. Le coût est nul si
+  // aucun biome 3D n'est actif.
   if (window.RE_3D && window.RE_3D.isActive()) {
-    try { window.RE_3D.render(game.camera?.x || 0, dt); } catch (e) { console.warn("[RE_3D] render", e); }
+    try {
+      window.RE_3D.syncFromGame(game);
+      window.RE_3D.render(game.camera?.x || 0, dt);
+    } catch (e) {
+      console.warn("[RE_3D] render", e);
+    }
   }
   try {
     render(ctx);
@@ -3673,6 +3679,7 @@ function drawBattlefieldLane(ctx) {
 // dessinés en premier, ceux du bas par-dessus → fausse profondeur 2.5D.
 // L'ancre du sprite est au pied du prop (bas-centre) pour que le pied colle au sol.
 function drawProps(ctx) {
+  if (isBiome3D(game.biome)) return;
   if (!game.props || game.props.length === 0) return;
   const sorted = [...game.props].sort((a, b) => a.y - b.y);
   for (const p of sorted) {
@@ -3688,6 +3695,12 @@ function drawProps(ctx) {
 }
 
 function drawBase(ctx, side) {
+  // Biome 3D : la base entière (rempart, slots, bâtiment) est rendue par
+  // three.js. La HP bar reste en 2D (overlay au-dessus du canvas WebGL).
+  if (isBiome3D(game.biome)) {
+    drawBaseHP(ctx, side);
+    return;
+  }
   const baseX = side === "player" ? 0 : CONFIG.W - CONFIG.BASE_W;
   const baseY = CONFIG.HUD_H;
   const baseH = CONFIG.H - CONFIG.HUD_H;
@@ -4345,6 +4358,8 @@ function unitSpriteNameFor(u) {
 }
 
 function drawUnits(ctx) {
+  // Biome 3D : unités rendues par three.js (pool de meshes par référence d'unité).
+  if (isBiome3D(game.biome)) return;
   for (const u of game.units) {
     const radius = u.stats.radius;
     // Aura boss : halo rouge pulsant + couronne, sous le sprite
@@ -4971,6 +4986,7 @@ function updateAmbientAnims(dt) {
 }
 
 function drawAmbientAnims(ctx) {
+  if (isBiome3D(game.biome)) return;
   for (const ev of game.ambientAnims.active) {
     if (ev.type === "tumbleweed") {
       const img = sprites["anim-tumbleweed"];
@@ -5592,6 +5608,7 @@ function formatStatPreview(factory, stat) {
 }
 
 function drawWallSlots(ctx, side) {
+  if (isBiome3D(game.biome)) return;
   const state = game[side];
   if (!state || !state.wallSlots) return;
   const isPlayer = side === mySide();
