@@ -159,33 +159,39 @@ const FACTORY_TYPES = {
 };
 
 const UNIT_TYPES = {
+  // Rééquilibrage 2026-05-14 :
+  //   - HP global ×1.55 à ×1.71 → plus rien n'est one-shot par un sniper T3.
+  //   - Sniper damage 35→22 (-37%) et range 145→120 (-17%) → casse la meta
+  //     full-sniper qui supprimait toutes les autres compos.
+  //   - Medic heal 12→18 (+50%), atk interval 1.0→0.85s, range 95→110 →
+  //     rend le médic réellement compétitif vs les DPS du board.
   light: {
     id: "light",
-    hp: 30, damage: 10, speed: 90, radius: 8,
+    hp: 50, damage: 10, speed: 90, radius: 8,
     range: 55, attackInterval: 0.7, killReward: 10,
     layer: "ground", canTargetAir: false,
   },
   heavy: {
     id: "heavy",
-    hp: 80, damage: 25, speed: 50, radius: 12,
+    hp: 130, damage: 25, speed: 50, radius: 12,
     range: 65, attackInterval: 1.5, killReward: 25,
     layer: "ground", canTargetAir: false,
   },
   swarmer: {
     id: "swarmer",
-    hp: 18, damage: 4, speed: 135, radius: 6,
+    hp: 30, damage: 4, speed: 135, radius: 6,
     range: 35, attackInterval: 0.45, killReward: 5,
     layer: "ground", canTargetAir: false,
   },
   sniper: {
     id: "sniper",
-    hp: 55, damage: 35, speed: 50, radius: 10,
-    range: 145, attackInterval: 2.0, killReward: 28,
+    hp: 80, damage: 22, speed: 50, radius: 10,
+    range: 120, attackInterval: 2.0, killReward: 28,
     layer: "ground", canTargetAir: true, // SEUL ground qui peut viser l'air
   },
   air: {
     id: "air",
-    hp: 35, damage: 10, speed: 110, radius: 9,   // PV 45→35, dmg 14→10 (vulnérable face aux turrets/sniper)
+    hp: 60, damage: 10, speed: 110, radius: 9,
     range: 75, attackInterval: 1.1, killReward: 30,
     layer: "air",
     canTargetAir: true, // les drones peuvent tirer sur tout : sol + air
@@ -195,8 +201,8 @@ const UNIT_TYPES = {
   // damage = montant soigné par tick ; range = rayon de soin.
   medic: {
     id: "medic",
-    hp: 45, damage: 12, speed: 85, radius: 9,
-    range: 95, attackInterval: 1.0, killReward: 0,
+    hp: 75, damage: 18, speed: 85, radius: 9,
+    range: 110, attackInterval: 0.85, killReward: 0,
     layer: "ground", canTargetAir: false,
     isMedic: true, // flag pour la logique de ciblage
   },
