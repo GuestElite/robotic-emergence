@@ -1204,7 +1204,16 @@ def _medic_render_leg(d, base_x, base_y, x_off, y_off, is_far=False):
 def render_unit_medic(side: str, frame: int = 0, tier: int = 0, pal_override: dict = None) -> Image.Image:
     """Médic K9 quadrupède en vue 3/4. `frame` ∈ [0, 3] pour le cycle de course.
     `tier` ∈ {0, 1, 2} sélectionne la skin (Common/Steel/Royal Blue). pal_override
-    écrase la palette dérivée (utilisé pour les variants biomes)."""
+    écrase la palette dérivée (utilisé pour les variants biomes).
+
+    Évolutions visuelles par tier :
+      T0 — chien de base, panneau médical blanc + croix verte, antenne queue
+      T1 — Tactical : plaque d'épaule métal + antenne haute + pulse vert + croix
+           emblème sur le casque + halo plus marqué
+      T2 — Elite : tout T1 + module médical surélevé sur le dos + liseré doré
+           sur la croix + bande dorée sur le flanc + 2e antenne dorée + halo or"""
+    is_t1 = tier >= 1
+    is_t2 = tier >= 2
     frame = max(0, min(3, int(frame)))
     W = H = 48
     pal = pal_override if pal_override is not None else side_palette(side, tier)
@@ -1250,6 +1259,38 @@ def render_unit_medic(side: str, frame: int = 0, tier: int = 0, pal_override: di
     d.rectangle((panel_x0 + 1, mid_y, panel_x1 - 1, mid_y + 1), fill=_MED["cross"])
     d.rectangle((mid_x, panel_y0 + 1, mid_x + 1, panel_y1 - 1), fill=_MED["cross"])
 
+    # === T1+ : Tactical armor — plaque d'épaule sur le flanc avant droit ===
+    if is_t1:
+        plate_x0, plate_y0 = body_right - 8, body_top + 5
+        plate_x1, plate_y1 = body_right - 3, body_top + 9
+        d.rounded_rectangle((plate_x0, plate_y0, plate_x1, plate_y1), radius=1,
+                            fill=METAL["darkest"], outline=ACCENT["outline"])
+        # Rivet brillant en haut + reflet métal
+        d.point((plate_x0 + 1, plate_y0 + 1), fill=METAL["highlight"])
+        d.line((plate_x0, plate_y0 + 1, plate_x0, plate_y1 - 1), fill=METAL["light"])
+
+    # === T2 : Elite — bande dorée sur le flanc + liseré doré sur la croix ===
+    if is_t2:
+        # Bande dorée horizontale au milieu du flanc dark (visible sur le côté)
+        d.line((body_left + 3, body_top + 8, body_right - 5, body_top + 8),
+               fill=GOLD["base"], width=1)
+        # Liseré doré : 2 points dorés aux coins haut de la croix médicale
+        d.point((panel_x0, panel_y0), fill=GOLD["light"])
+        d.point((panel_x1, panel_y0), fill=GOLD["light"])
+        # Petit strip doré sous le panneau (base premium)
+        d.line((panel_x0 + 1, panel_y1, panel_x1 - 1, panel_y1),
+               fill=GOLD["base"], width=1)
+        # Module médical surélevé au-dessus du panneau (raised pack avec mini-croix)
+        pack_x0, pack_y0 = cx - 3, body_top - 2
+        pack_x1, pack_y1 = cx + 2, body_top + 1
+        d.rounded_rectangle((pack_x0, pack_y0, pack_x1, pack_y1), radius=1,
+                            fill=_MED["white"], outline=ACCENT["outline"])
+        ppx_mid = (pack_x0 + pack_x1) // 2
+        d.point((ppx_mid, pack_y0 + 1), fill=_MED["cross"])
+        d.point((ppx_mid, pack_y1 - 1), fill=_MED["cross"])
+        d.point((ppx_mid - 1, (pack_y0 + pack_y1) // 2), fill=_MED["cross"])
+        d.point((ppx_mid + 1, (pack_y0 + pack_y1) // 2), fill=_MED["cross"])
+
     # Pattes proches (devant, plus grosses)
     near_y = cy + 3 + body_y_off
     _medic_render_leg(d, cx + 6, near_y, _MEDIC_LEG_X_PHASE["front_near"][frame],
@@ -1276,18 +1317,50 @@ def render_unit_medic(side: str, frame: int = 0, tier: int = 0, pal_override: di
                (head_x1 - 1, head_y0 + 1)], fill=pal["dark"],
               outline=ACCENT["outline"])
 
-    # Antenne arrière + LED verte (remplace la queue)
-    tail_x, tail_y = body_left - 2, body_top + 2
-    d.line((tail_x + 2, tail_y, tail_x - 2, tail_y - 3),
-           fill=METAL["darkest"], width=1)
-    d.ellipse((tail_x - 3, tail_y - 4, tail_x - 1, tail_y - 2),
-              fill=_MED["cross_glow"])
+    # === T1+ : Emblème croix médicale verte au sommet du casque ===
+    if is_t1:
+        helmet_cx = (head_x0 + head_x1) // 2
+        # Croix 3×3 verte au-dessus de la tête (entre les oreilles)
+        d.point((helmet_cx, head_y0 - 1), fill=_MED["cross"])
+        d.point((helmet_cx - 1, head_y0), fill=_MED["cross"])
+        d.point((helmet_cx, head_y0), fill=_MED["cross"])
+        d.point((helmet_cx + 1, head_y0), fill=_MED["cross"])
 
-    # Halo de soin diffus
+    # === T2 : Beacon doré clignotant au-dessus de la croix casque ===
+    if is_t2:
+        helmet_cx = (head_x0 + head_x1) // 2
+        d.point((helmet_cx, head_y0 - 2), fill=GOLD["light"])
+
+    # Antenne arrière + LED verte (remplace la queue)
+    # T0: hauteur 3 / T1: hauteur 5 / T2: hauteur 6 + 2e antenne dorée
+    tail_x, tail_y = body_left - 2, body_top + 2
+    ant_h = 3 + (2 if is_t1 else 0) + (1 if is_t2 else 0)
+    d.line((tail_x + 2, tail_y, tail_x - 2, tail_y - ant_h),
+           fill=METAL["darkest"], width=1)
+    d.ellipse((tail_x - 3, tail_y - ant_h - 1, tail_x - 1, tail_y - ant_h + 1),
+              fill=_MED["cross_glow"])
+    # T1+ : Pulse halo autour de la LED principale
+    if is_t1:
+        d.ellipse((tail_x - 4, tail_y - ant_h - 2, tail_x, tail_y - ant_h + 2),
+                  outline=(*_MED["cross_glow"][:3], 180), width=1)
+    # T2 : Seconde antenne courte avec LED dorée (scanner array)
+    if is_t2:
+        ant2_x = tail_x + 2
+        d.line((ant2_x + 1, tail_y - 1, ant2_x, tail_y - 5),
+               fill=METAL["darkest"], width=1)
+        d.ellipse((ant2_x - 1, tail_y - 6, ant2_x + 1, tail_y - 4),
+                  fill=GOLD["light"])
+
+    # Halo de soin diffus — intensité monte avec le tier, T2 ajoute un anneau doré
     halo = Image.new("RGBA", (W, H), TRANSPARENT)
     hd = ImageDraw.Draw(halo, "RGBA")
+    base_alpha = 70 + tier * 35  # T0=70 / T1=105 / T2=140
     hd.ellipse((cx - 20, cy - 4, cx + 20, cy + 18),
-               outline=(*_MED["cross_glow"][:3], 70), width=2)
+               outline=(*_MED["cross_glow"][:3], base_alpha), width=2)
+    if is_t2:
+        # Anneau doré intérieur (signature Royal Blue)
+        hd.ellipse((cx - 16, cy - 1, cx + 16, cy + 15),
+                   outline=(*GOLD["light"][:3], 150), width=2)
     halo = halo.filter(ImageFilter.GaussianBlur(2))
     img = Image.alpha_composite(halo, img)
     return img
