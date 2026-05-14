@@ -1987,7 +1987,7 @@ function updateCameraShake(dt) {
 // Spawn interval indexé sur le nombre d'unités : durée doublée à chaque
 // triplement d'unités au-delà de 2430 (ancre 8s) — 810→6s, 2430→8s,
 // 7290→16s, 21870→32s, 65610→64s, 196830→128s. Plancher 6s. Multi-spawn
-// par frame absorbe les intervals très courts.
+// par frame absorbe les intervals très courts. Timer inter-vague : 10s.
 // Taille de vague ×3 entre chaque vague (base 10) sans cap : v1=10, v2=30,
 // v3=90, v4=270, v5=810, v6=2430… Fin de vague = queue vide → timer inter-
 // vague de 3s puis vague suivante (même si des unités sont encore vivantes
@@ -2142,7 +2142,7 @@ function updateWaveSpawning(dt) {
   w.lastBonus = bonus;
   w.current++;
   w.inWave = false;
-  w.betweenWaves = 3;
+  w.betweenWaves = 10;
   w.justClearedAt = performance.now();
 }
 
