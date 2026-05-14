@@ -1984,11 +1984,12 @@ function updateCameraShake(dt) {
 //   - Vagues 7+  : Tier III (×3.10 HP/dmg, ×1.15 speed, ×1.22 range, ×1.40 radius)
 // Par-dessus le tier, scaling fin de +8%/vague (HP & dmg, cumulé).
 //
-// Spawn rapide (0.60s → 0.30s). Taille de vague ×3 entre chaque vague
-// (base 10) sans cap : v1=10, v2=30, v3=90, v4=270, v5=810, v6=2430…
-// Fin de vague = queue vide → timer inter-vague de 3s puis vague suivante
-// (même si des unités sont encore vivantes — les restes s'accumulent →
-// pression croissante).
+// Spawn interval auto-ajusté à la taille de vague : plus il y a d'unités,
+// plus les spawns s'enchaînent vite (cible ~6s par vague, floor 0.005s).
+// Taille de vague ×3 entre chaque vague (base 10) sans cap : v1=10, v2=30,
+// v3=90, v4=270, v5=810, v6=2430… Fin de vague = queue vide → timer inter-
+// vague de 3s puis vague suivante (même si des unités sont encore vivantes
+// — les restes s'accumulent → pression croissante).
 //
 // Boss : vagues %5 → heavy ×3 HP / ×2 dmg.
 // Mini-boss : vagues 3, 7, 11… (≥3 et %4===3, sauf si déjà boss) → heavy
@@ -2097,17 +2098,27 @@ function updateWaveSpawning(dt) {
       w.totalThisWave = w.queue.length;
       w.inWave = true;
       w.spawnTimer = 0;
-      // Spawn rate : démarre à 0.60s entre 2 unités, accélère 0.04s/vague jusqu'à 0.30s.
-      // Cible : vague 1 (10 unités) spawne en ~6s, vague 10 (33 unités) en ~10s.
-      w.spawnInterval = Math.max(0.30, 0.60 - (w.current - 1) * 0.04);
+      // Spawn interval auto-ajusté : plus la vague a d'unités, plus l'intervalle
+      // est court. Cible = ~6s de durée totale de spawn par vague (jusqu'au cap
+      // minimum 0.005s = 200 unités/s). Concrètement :
+      //   v1 (10  unités) : 0.60s   → 6s
+      //   v2 (30) : 0.20s            → 6s
+      //   v3 (90) : 0.067s           → 6s
+      //   v4 (270): 0.022s           → 6s
+      //   v5 (810): 0.0074s → 0.005 → 4s
+      //   v6 (2430): 0.005 (cap)     → 12s
+      w.spawnInterval = Math.max(0.005, 6 / w.totalThisWave);
       w.justClearedAt = null;
     }
     return;
   }
   if (w.queue.length > 0) {
     w.spawnTimer += dt;
-    if (w.spawnTimer >= w.spawnInterval) {
-      w.spawnTimer = 0;
+    // Multi-spawn par frame : si spawnInterval < dt (cas des grosses vagues
+    // avec interval ~0.01s à 60fps où dt ≈ 0.016s), on spawne autant d'unités
+    // que la frame autorise au lieu d'être plafonné à 1/frame.
+    while (w.queue.length > 0 && w.spawnTimer >= w.spawnInterval) {
+      w.spawnTimer -= w.spawnInterval;
       const spec = w.queue.shift();
       spawnWaveUnit(spec, w.current);
     }
