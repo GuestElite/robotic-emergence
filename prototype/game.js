@@ -1959,18 +1959,33 @@ function updateCameraShake(dt) {
 }
 
 // ── MODE VAGUES ─────────────────────────────────────────────────────────
-// L'ennemi n'a aucun bâtiment : à chaque vague, un nombre fixe d'unités
-// spawne aux portes du rempart adverse, étalé dans le temps (2.0s → 1.0s
-// entre 2 spawns). Dès que toute la queue de la vague est sortie, la
-// vague est "terminée" côté spawn et un timer inter-vague de 10s démarre,
-// indépendamment du nombre d'ennemis encore vivants. Pendant ce timer,
-// AUCUNE unité ennemie n'apparaît. La pression croissante vient (a) de la
-// densité qui monte, (b) des survivants qui se cumulent à la vague
-// suivante si le joueur n'a pas eu le temps de nettoyer.
+// L'ennemi n'a aucun bâtiment visible, mais conceptuellement il "améliore
+// ses bâtiments" à mesure que les vagues progressent : son tier d'usine
+// monte (I → II → III), ce qui applique TIER_MULTIPLIER (HP & dmg),
+// TIER_SPEED_MULTIPLIER, TIER_RANGE_MULTIPLIER et TIER_RADIUS_MULTIPLIER
+// aux unités spawnées — mêmes paliers que les usines joueur.
+//   - Vagues 1-2 : Tier I  (×1.00)
+//   - Vagues 3-6 : Tier II (×1.85 HP/dmg, ×1.06 speed, ×1.10 range, ×1.18 radius)
+//   - Vagues 7+  : Tier III (×3.10 HP/dmg, ×1.15 speed, ×1.22 range, ×1.40 radius)
+// Par-dessus le tier, scaling fin de +8%/vague (HP & dmg, cumulé).
+//
+// Spawn étalé (2.0s → 1.0s). Fin de vague = queue vide → timer inter-vague
+// de 10s puis vague suivante (même si des unités sont encore vivantes —
+// les restes s'accumulent → pression croissante).
+//
+// Boss : vagues %5 → heavy ×3 HP / ×2 dmg.
+// Mini-boss : vagues 3, 7, 11… (≥3 et %4===3, sauf si déjà boss) → heavy
+// ×2 HP / dmg normal.
+function enemyTierForWave(waveNum) {
+  if (waveNum <= 2) return 1;
+  if (waveNum <= 6) return 2;
+  return 3;
+}
+
 function buildWaveQueue(waveNum) {
   const queue = [];
-  // Densité : démarre à 6 puis +2 par vague (vague 5 = 14 unités, v10 = 24).
-  const total = 6 + Math.floor(waveNum * 1.8);
+  // Densité : démarre à 8 puis +2.5/vague (vague 5 = 20, vague 10 = 33).
+  const total = 8 + Math.floor(waveNum * 2.5);
   for (let i = 0; i < total; i++) {
     const r = Math.random();
     let typeId;
@@ -1983,36 +1998,49 @@ function buildWaveQueue(waveNum) {
     } else {
       typeId = r < 0.18 ? "light" : r < 0.36 ? "swarmer" : r < 0.55 ? "heavy" : r < 0.78 ? "sniper" : "air";
     }
-    queue.push({ typeId, isBoss: false });
+    queue.push({ typeId, isBoss: false, isMiniBoss: false });
   }
-  // Boss à la fin des vagues multiples de 5 (vague 5, 10, 15…) :
-  // une unité massive heavy avec ×3 HP et ×2 dmg.
-  if (waveNum % 5 === 0) {
-    queue.push({ typeId: "heavy", isBoss: true });
+  const isBossWave = waveNum % 5 === 0;
+  const isMiniBossWave = !isBossWave && waveNum >= 3 && waveNum % 4 === 3;
+  if (isMiniBossWave) {
+    queue.push({ typeId: "heavy", isBoss: false, isMiniBoss: true });
+  }
+  if (isBossWave) {
+    queue.push({ typeId: "heavy", isBoss: true, isMiniBoss: false });
   }
   return queue;
 }
 
 function spawnWaveUnit(spec, waveNum) {
-  // spec : { typeId, isBoss } (rétrocompat : si string passée, traité comme typeId)
+  // spec : { typeId, isBoss, isMiniBoss } (rétrocompat : si string passée, traité comme typeId)
   const typeId = typeof spec === "string" ? spec : spec.typeId;
   const isBoss = typeof spec === "string" ? false : !!spec.isBoss;
+  const isMiniBoss = typeof spec === "string" ? false : !!spec.isMiniBoss;
   const ut = UNIT_TYPES[typeId];
   if (!ut) return;
-  // Scaling de stats : +10% HP/dmg par vague (cumulé). Boss : ×3 HP / ×2 dmg.
-  const sm = 1 + (waveNum - 1) * 0.10;
-  const bossHpMult = isBoss ? 3 : 1;
+  // Tier ennemi : applique les mêmes multiplicateurs que les usines joueur.
+  const tier = enemyTierForWave(waveNum);
+  const tierMult     = TIER_MULTIPLIER[tier] || 1;       // HP & dmg
+  const speedMult    = TIER_SPEED_MULTIPLIER[tier] || 1;
+  const rangeMult    = TIER_RANGE_MULTIPLIER[tier] || 1;
+  const radiusMult   = TIER_RADIUS_MULTIPLIER[tier] || 1;
+  // Scaling fin : +8%/vague (cumulé). Boss : ×3 HP / ×2 dmg. Mini-boss : ×2 HP.
+  const sm = 1 + (waveNum - 1) * 0.08;
+  const bossHpMult = isBoss ? 3 : (isMiniBoss ? 2 : 1);
   const bossDmgMult = isBoss ? 2 : 1;
+  const bossSpeedMult = isBoss ? 0.85 : (isMiniBoss ? 0.92 : 1);
+  const bossRadiusMult = isBoss ? 1.4 : (isMiniBoss ? 1.2 : 1);
   const stats = {
-    hp: ut.hp * sm * bossHpMult,
-    damage: ut.damage * sm * bossDmgMult,
-    speed: ut.speed * (isBoss ? 0.85 : 1),
-    range: ut.range,
-    radius: ut.radius * (isBoss ? 1.4 : 1),
+    hp: ut.hp * sm * tierMult * bossHpMult,
+    damage: ut.damage * sm * tierMult * bossDmgMult,
+    speed: ut.speed * speedMult * bossSpeedMult,
+    range: ut.range * rangeMult,
+    radius: ut.radius * radiusMult * bossRadiusMult,
     attackInterval: ut.attackInterval,
-    killReward: Math.round((ut.killReward || 5) * (0.8 + waveNum * 0.05) * (isBoss ? 5 : 1)),
+    killReward: Math.round((ut.killReward || 5) * (0.8 + waveNum * 0.05) * (isBoss ? 5 : (isMiniBoss ? 2.5 : 1))),
     layer: ut.layer || "ground",
     canTargetAir: !!ut.canTargetAir,
+    tier,
   };
   const gateRows = CONFIG.PATH_ROWS;
   const gateRow = gateRows[Math.floor(Math.random() * gateRows.length)];
@@ -2022,6 +2050,7 @@ function spawnWaveUnit(spec, waveNum) {
     typeId,
     kind: "unit",
     isBoss,
+    isMiniBoss,
     x: gate.x,
     y: gate.y,
     gateY: gate.y,
@@ -2119,12 +2148,17 @@ function drawWaveOverlay(ctx) {
   const spawned = Math.max(0, total - toSpawn);
   const ratio = total > 0 ? spawned / total : 0;
   const hasBoss = w.queue.some((s) => s?.isBoss) || game.units.some((u) => u.isBoss && u.side === "enemy" && u.hp > 0);
+  const hasMiniBoss = w.queue.some((s) => s?.isMiniBoss) || game.units.some((u) => u.isMiniBoss && u.side === "enemy" && u.hp > 0);
+  const enemyTier = enemyTierForWave(w.current);
+  const tierRoman = enemyTier === 1 ? "I" : enemyTier === 2 ? "II" : "III";
 
   ctx.fillStyle = "#fff";
   ctx.font = "bold 16px -apple-system, sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  const waveLabel = `🌊 Vague ${w.current}${hasBoss ? "  ·  👑 BOSS" : ""}`;
+  let waveLabel = `🌊 Vague ${w.current}  ·  ⚙️ Tier ${tierRoman}`;
+  if (hasBoss) waveLabel += "  ·  👑 BOSS";
+  else if (hasMiniBoss) waveLabel += "  ·  ⚔️ Mini-boss";
   ctx.fillText(waveLabel, x + 16, y + 12);
 
   ctx.font = "11px -apple-system, sans-serif";
@@ -4164,6 +4198,23 @@ function drawUnits(ctx) {
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText("👑", u.x, u.y - radius - 10);
+    } else if (u.isMiniBoss) {
+      // Mini-boss : halo orange plus discret + épées au-dessus
+      const t = performance.now() / 280;
+      const pulse = 0.5 + 0.5 * Math.sin(t);
+      const auraR = radius * (1.8 + 0.18 * pulse);
+      const aura = ctx.createRadialGradient(u.x, u.y, radius * 0.4, u.x, u.y, auraR);
+      aura.addColorStop(0, `rgba(251, 146, 60, ${(0.40 + 0.18 * pulse).toFixed(3)})`);
+      aura.addColorStop(0.6, "rgba(251, 146, 60, 0.14)");
+      aura.addColorStop(1, "rgba(251, 146, 60, 0)");
+      ctx.fillStyle = aura;
+      ctx.beginPath();
+      ctx.arc(u.x, u.y, auraR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = `bold ${Math.round(radius * 0.75)}px -apple-system, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("⚔️", u.x, u.y - radius - 8);
     }
     const spriteName = unitSpriteNameFor(u);
     if (sprites[spriteName]) {
