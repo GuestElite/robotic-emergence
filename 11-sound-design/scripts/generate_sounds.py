@@ -551,7 +551,9 @@ def main():
         ("unit-air-shoot.wav",       sfx_unit_air_shoot),
         ("unit-death.wav",           sfx_unit_death),
         ("unit-crash-rampart.wav",   sfx_unit_crash_rampart),
-        ("factory-place.wav",        sfx_factory_place),
+        # factory-place.wav est maintenant le vrai enregistrement Benboncan (CC-BY 4.0).
+        # Cette synthèse reste comme fallback/référence sous un nom différent.
+        ("factory-place-synth.wav",  sfx_factory_place),
         ("effect-lightning.wav",     sfx_effect_lightning),
         # Ambient par biome (boucles 30s, fade in/out propre pour loop seamless)
         ("ambient-desert.wav",       lambda: sfx_ambient_desert(30.0)),

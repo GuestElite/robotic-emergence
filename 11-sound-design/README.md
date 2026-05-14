@@ -12,7 +12,8 @@ sfx/                      Effets sonores courts
 ├── unit-sniper-shoot.wav     Boom avec écho longue portée (unité Sniper)
 ├── unit-death.wav            Mort d'un robot (explosion + descente)
 ├── unit-crash-rampart.wav    Crash contre rempart ennemi (thud + clang)
-└── effect-lightning.wav      Foudre / impact magique (crack + rumble)
+├── effect-lightning.wav      Foudre / impact magique (crack + rumble)
+└── factory-place.wav         Forge clang à la pose de factory ("Large Anvil & Steel Hammer 2" par Benboncan, CC-BY 4.0)
 
 music/
 ├── bgm-menu.mp3                Musique du menu — "Ride The Wind" par Scott Buckley (CC-BY 4.0)
@@ -52,9 +53,15 @@ Le script est déterministe (seeds fixes) → résultats reproductibles.
 > **"Pathfinder"** par Scott Buckley — released under CC-BY 4.0.
 > [www.scottbuckley.com.au](https://www.scottbuckley.com.au)
 
-Cette attribution **doit apparaître** dans les crédits du jeu (écran de crédits,
-README du repo, description vidéo si gameplay sur YouTube, etc.) tant que la
-track est utilisée.
+## Crédits SFX
+
+> **"Large Anvil & Steel Hammer 2"** par Benboncan — released under CC-BY 4.0.
+> [freesound.org/people/Benboncan/sounds/103630/](https://freesound.org/people/Benboncan/sounds/103630/)
+> Utilisé pour `factory-place.wav` (clang de pose de factory).
+
+Ces attributions **doivent apparaître** dans les crédits du jeu (écran de
+crédits, README du repo, description vidéo si gameplay sur YouTube, etc.)
+tant que les ressources sont utilisées.
 
 ## Remplacer la musique
 

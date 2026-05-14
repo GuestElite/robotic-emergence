@@ -27,6 +27,11 @@ venv/
 08-art-direction/preview/
 12-biomes/*/preview/
 
+# Sound design — sources brutes (téléchargés depuis Freesound/OpenGameArt avant
+# intégration). Restent en local pour réécoute/re-extraction. URLs documentées
+# dans 11-sound-design/README.md.
+11-sound-design/sfx/raw/
+
 # Vercel CLI
 .vercel
 
