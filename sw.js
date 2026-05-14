@@ -5,7 +5,7 @@
 // - Le reste passe direct au réseau.
 //
 // Bump CACHE_VERSION quand on veut purger les anciens caches.
-const CACHE_VERSION = "re-v3";
+const CACHE_VERSION = "re-v4";
 const ASSET_CACHE = `${CACHE_VERSION}-assets`;
 const APP_CACHE = `${CACHE_VERSION}-app`;
 
@@ -58,14 +58,15 @@ self.addEventListener("fetch", (evt) => {
   if (url.pathname.startsWith("/api/") || url.pathname.includes("supabase")) return;
 
   if (isAsset(url)) {
-    // Cache-first
+    // Cache-first. Skip range requests (audio/video seek → 206) — Cache API ne supporte que 200.
+    if (req.headers.get("range")) return;
     evt.respondWith(
       caches.match(req).then((cached) => {
         if (cached) return cached;
         return fetch(req).then((res) => {
-          if (res.ok) {
+          if (res.ok && res.status === 200) {
             const clone = res.clone();
-            caches.open(ASSET_CACHE).then((c) => c.put(req, clone));
+            caches.open(ASSET_CACHE).then((c) => c.put(req, clone)).catch(() => {});
           }
           return res;
         });
@@ -79,9 +80,9 @@ self.addEventListener("fetch", (evt) => {
     evt.respondWith(
       fetch(req)
         .then((res) => {
-          if (res.ok) {
+          if (res.ok && res.status === 200) {
             const clone = res.clone();
-            caches.open(APP_CACHE).then((c) => c.put(req, clone));
+            caches.open(APP_CACHE).then((c) => c.put(req, clone)).catch(() => {});
           }
           return res;
         })
