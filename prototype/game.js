@@ -403,11 +403,12 @@ const SFX_WAV_VOLUMES = {
 };
 
 // Tracks de menu disponibles dans le dropdown top-left.
-// Tous CC-BY 4.0 par Scott Buckley — crédités dans 11-sound-design/README.md.
+// CC-BY 4.0 — crédits dans 11-sound-design/README.md.
 const MENU_MUSIC_TRACKS = [
   { id: "ride-the-wind", label: "Ride The Wind",    file: "bgm-menu.mp3",             mood: "Aventure épique" },
   { id: "bring-sky",     label: "Bring Me The Sky", file: "bgm-menu-bring-sky.mp3",   mood: "Inspirant doux" },
   { id: "decoherence",   label: "Decoherence",      file: "bgm-menu-decoherence.mp3", mood: "Sci-fi ambient" },
+  { id: "five-armies",   label: "Five Armies",      file: "bgm-cinematic-epic.mp3",   mood: "Épique bataille" },
 ];
 
 const audio = {
@@ -464,7 +465,7 @@ const audio = {
     let minGap = 0.06;
     if (type === "explosion" || type === "crash" || type === "lightning") minGap = 0.18;
     else if (type === "death") minGap = 0.08;
-    else if (type === "place") minGap = 0.22;  // forge clang dure ~570ms, espacer
+    else if (type === "place") minGap = 0.45;  // double-frappe forge ~1.75s, espacer
     if (this.lastSfxTime[type] && now - this.lastSfxTime[type] < minGap) return;
     this.lastSfxTime[type] = now;
 
@@ -472,13 +473,23 @@ const audio = {
     const buf = this.wavBuffers[type];
     if (buf) {
       try {
-        const src = ctx.createBufferSource();
-        src.buffer = buf;
-        const g = ctx.createGain();
         const baseVol = SFX_WAV_VOLUMES[type] != null ? SFX_WAV_VOLUMES[type] : 0.4;
-        g.gain.value = baseVol * this.sfxVolume;
-        src.connect(g).connect(ctx.destination);
-        src.start(0);
+        // "place" = double frappe forge (tink-CLANG, le 2e hit fait le climax)
+        // Hit 1 à 70% volume = positionnement / Hit 2 à 100% = forge finale.
+        // Décalage 220ms : pas assez serré pour fusionner, pas assez écarté pour
+        // que ça sonne comme 2 events séparés.
+        const hits = (type === "place")
+          ? [{ delay: 0,    volMul: 0.70 },
+             { delay: 0.22, volMul: 1.00 }]
+          : [{ delay: 0,    volMul: 1.00 }];
+        for (const h of hits) {
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          const g = ctx.createGain();
+          g.gain.value = baseVol * this.sfxVolume * h.volMul;
+          src.connect(g).connect(ctx.destination);
+          src.start(now + h.delay);
+        }
       } catch (_) {}
       return;
     }
