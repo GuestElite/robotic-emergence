@@ -408,7 +408,7 @@ const MENU_MUSIC_TRACKS = [
   { id: "ride-the-wind", label: "Ride The Wind",    file: "bgm-menu.mp3",             mood: "Aventure épique" },
   { id: "bring-sky",     label: "Bring Me The Sky", file: "bgm-menu-bring-sky.mp3",   mood: "Inspirant doux" },
   { id: "decoherence",   label: "Decoherence",      file: "bgm-menu-decoherence.mp3", mood: "Sci-fi ambient" },
-  { id: "five-armies",   label: "Five Armies",      file: "bgm-cinematic-epic.mp3",   mood: "Épique bataille" },
+  { id: "five-armies",   label: "Five Armies",      file: "bgm-cinematic-epic.m4a",   mood: "Épique bataille" },
 ];
 
 const audio = {
@@ -665,24 +665,43 @@ const audio = {
     const saveBound = () => this._saveMenuMusicPos();
     audioEl.addEventListener("timeupdate", saveBound);
   },
+  _instrumentMenuAudio(audioEl, trackId) {
+    const MEDIA_ERR = { 1: "MEDIA_ERR_ABORTED", 2: "MEDIA_ERR_NETWORK", 3: "MEDIA_ERR_DECODE", 4: "MEDIA_ERR_SRC_NOT_SUPPORTED" };
+    audioEl.addEventListener("error", () => {
+      const err = audioEl.error;
+      const code = err && err.code;
+      console.error(`[MenuMusic][${trackId}] error code=${code} (${MEDIA_ERR[code] || "?"}) message="${err && err.message}" src=${audioEl.src} networkState=${audioEl.networkState} readyState=${audioEl.readyState}`);
+    });
+    audioEl.addEventListener("stalled", () => console.warn(`[MenuMusic][${trackId}] stalled src=${audioEl.src}`));
+    audioEl.addEventListener("abort", () => console.warn(`[MenuMusic][${trackId}] abort src=${audioEl.src}`));
+    audioEl.addEventListener("loadedmetadata", () => console.info(`[MenuMusic][${trackId}] loadedmetadata duration=${audioEl.duration.toFixed(2)}s`));
+    audioEl.addEventListener("canplay", () => console.info(`[MenuMusic][${trackId}] canplay`));
+    audioEl.addEventListener("playing", () => console.info(`[MenuMusic][${trackId}] playing`));
+  },
   preloadMenuMusic() {
     if (this.menuMusic) return;
     const track = MENU_MUSIC_TRACKS.find((t) => t.id === this.menuMusicTrackId)
                   || MENU_MUSIC_TRACKS[0];
-    this.menuMusic = new Audio(`../11-sound-design/music/${track.file}`);
+    const url = `../11-sound-design/music/${track.file}`;
+    console.info(`[MenuMusic][${track.id}] preload url=${url}`);
+    this.menuMusic = new Audio(url);
     this.menuMusic.loop = true;
     this.menuMusic.preload = "auto";
     this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
     this.menuMusic._trackId = track.id;
+    this._instrumentMenuAudio(this.menuMusic, track.id);
     this._attachMenuMusicTracking(this.menuMusic, track.id);
-    try { this.menuMusic.load(); } catch (_) {}
+    try { this.menuMusic.load(); } catch (e) { console.error(`[MenuMusic][${track.id}] load() threw:`, e); }
   },
   startMenuMusic() {
     if (!this.musicEnabled) return;
     if (this.menuMusic && !this.menuMusic.paused) return;
     if (!this.menuMusic) this.preloadMenuMusic();
     this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
-    this.menuMusic.play().catch(() => { /* autoplay bloqué — réessaie au prochain clic */ });
+    const tid = this.menuMusic._trackId;
+    this.menuMusic.play()
+      .then(() => console.info(`[MenuMusic][${tid}] play() resolved`))
+      .catch((e) => console.warn(`[MenuMusic][${tid}] play() rejected: ${e.name} — ${e.message}`));
   },
   setMenuTrack(trackId) {
     const track = MENU_MUSIC_TRACKS.find((t) => t.id === trackId);
@@ -693,14 +712,19 @@ const audio = {
       try { this.menuMusic.pause(); } catch (_) {}
       this.menuMusic = null;
     }
-    this.menuMusic = new Audio(`../11-sound-design/music/${track.file}`);
+    const url = `../11-sound-design/music/${track.file}`;
+    console.info(`[MenuMusic][${trackId}] switch url=${url}`);
+    this.menuMusic = new Audio(url);
     this.menuMusic.loop = true;
     this.menuMusic.preload = "auto";
     this.menuMusic.volume = this.menuMusicVolume * this.musicVolume;
     this.menuMusic._trackId = trackId;
+    this._instrumentMenuAudio(this.menuMusic, trackId);
     this._attachMenuMusicTracking(this.menuMusic, trackId);
     if (this.musicEnabled && game.screen === "menu") {
-      this.menuMusic.play().catch(() => {});
+      this.menuMusic.play()
+        .then(() => console.info(`[MenuMusic][${trackId}] play() resolved`))
+        .catch((e) => console.warn(`[MenuMusic][${trackId}] play() rejected: ${e.name} — ${e.message}`));
     }
   },
   stopMenuMusic() {

@@ -5,7 +5,7 @@
 // - Le reste passe direct au réseau.
 //
 // Bump CACHE_VERSION quand on veut purger les anciens caches.
-const CACHE_VERSION = "re-v4";
+const CACHE_VERSION = "re-v6";
 const ASSET_CACHE = `${CACHE_VERSION}-assets`;
 const APP_CACHE = `${CACHE_VERSION}-app`;
 
@@ -35,7 +35,7 @@ self.addEventListener("activate", (evt) => {
 });
 
 function isAsset(url) {
-  return /\.(png|jpg|jpeg|webp|svg|woff2?|mp3|wav|ogg|ico)$/i.test(url.pathname)
+  return /\.(png|jpg|jpeg|webp|svg|woff2?|mp3|m4a|wav|ogg|ico)$/i.test(url.pathname)
     || url.pathname.startsWith("/icons/")
     || url.pathname.startsWith("/08-art-direction/");
 }
