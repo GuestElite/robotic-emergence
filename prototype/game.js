@@ -925,13 +925,12 @@ const IEM_TTL_SEC = 1.2;
 
 // Drop Renforts : spawn ADAPTATIF d'unités tier I "light" gratuites — le
 // nombre dépend de la taille de l'armée adverse sur le board (50 %, plancher
-// 3, plafond 75 pour la perf). Bouton de panique défensive : plus l'ennemi
-// te submerge, plus le Drop renvoie de fantassins pour tenter d'inverser.
+// 3, PAS DE PLAFOND). Bouton de panique défensive : plus l'ennemi te
+// submerge, plus le Drop renvoie de fantassins pour tenter d'inverser.
 const DROP_COOLDOWN_SEC = 50;
 const DROP_COST = 200;
 const DROP_RATIO_OF_ENEMY = 0.5;
 const DROP_MIN_COUNT = 3;
-const DROP_MAX_COUNT = 75;
 
 // Surge Économique : un boost immédiat + 2.5x le revenu passif pendant 15s.
 // Outil de comeback ou d'accélération mid-game.
@@ -3268,7 +3267,7 @@ function fireDrop(side) {
   const enemyCount = game.units.reduce((n, u) =>
     (u.side === oppSide && (u.kind === "unit" || u.kind == null)) ? n + 1 : n, 0);
   const dropCount = Math.max(DROP_MIN_COUNT,
-    Math.min(DROP_MAX_COUNT, Math.floor(enemyCount * DROP_RATIO_OF_ENEMY)));
+    Math.floor(enemyCount * DROP_RATIO_OF_ENEMY));
 
   // Spawn devant la base : x à la frontière sortante, y distribué sur les
   // 3 gates avec jitter pour éviter le stack vertical visuel.
