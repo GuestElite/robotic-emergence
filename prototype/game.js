@@ -923,12 +923,15 @@ const IEM_COOLDOWN_SEC = 60;
 const IEM_COST = 400;
 const IEM_TTL_SEC = 1.2;
 
-// Drop Renforts : spawn 3 unités tier I "light" gratuites pour le camp lanceur,
-// directement à la sortie de base. Permet de réagir rapidement à une percée
-// adverse sans attendre la production de factory.
+// Drop Renforts : spawn ADAPTATIF d'unités tier I "light" gratuites — le
+// nombre dépend de la taille de l'armée adverse sur le board (50 %, plancher
+// 3, plafond 75 pour la perf). Bouton de panique défensive : plus l'ennemi
+// te submerge, plus le Drop renvoie de fantassins pour tenter d'inverser.
 const DROP_COOLDOWN_SEC = 50;
 const DROP_COST = 200;
-const DROP_UNIT_COUNT = 3;
+const DROP_RATIO_OF_ENEMY = 0.5;
+const DROP_MIN_COUNT = 3;
+const DROP_MAX_COUNT = 75;
 
 // Surge Économique : un boost immédiat + 2.5x le revenu passif pendant 15s.
 // Outil de comeback ou d'accélération mid-game.
@@ -3248,8 +3251,9 @@ function setSurgeCdFor(side, value) {
   else if (game.mode === "mp" && game.mp) game.mp.enemySurgeCooldown = value;
 }
 
-// Drop Renforts : spawn de DROP_UNIT_COUNT unités light tier 1 à la sortie de
-// base du camp. Coût payé, cooldown armé, SFX + secousse caméra subtile.
+// Drop Renforts : spawn d'unités light tier 1 à la sortie de base, en
+// nombre proportionnel à l'armée adverse (50%, capé). Coût payé, cooldown
+// armé, SFX + secousse caméra subtile.
 function fireDrop(side) {
   if (dropCdFor(side) > 0) return false;
   const state = game[side];
@@ -3258,20 +3262,32 @@ function fireDrop(side) {
   game.stats[side].moneySpent += DROP_COST;
   setDropCdFor(side, DROP_COOLDOWN_SEC);
 
-  // Spawn devant la base : x à la frontière sortante, y répartis sur 3 lanes.
+  // Compte l'armée adverse mobile sur le board (exclut turrets/bâtiments).
+  // Plus elle est grande, plus le Drop renvoie de renforts (50%, clampé).
+  const oppSide = side === "player" ? "enemy" : "player";
+  const enemyCount = game.units.reduce((n, u) =>
+    (u.side === oppSide && (u.kind === "unit" || u.kind == null)) ? n + 1 : n, 0);
+  const dropCount = Math.max(DROP_MIN_COUNT,
+    Math.min(DROP_MAX_COUNT, Math.floor(enemyCount * DROP_RATIO_OF_ENEMY)));
+
+  // Spawn devant la base : x à la frontière sortante, y distribué sur les
+  // 3 gates avec jitter pour éviter le stack vertical visuel.
   const baseX = side === "player" ? CONFIG.BASE_W + 24 : CONFIG.W - CONFIG.BASE_W - 24;
-  const lanes = [CONFIG.H * 0.30, CONFIG.H * 0.50, CONFIG.H * 0.70];
+  const gateYs = CONFIG.PATH_ROWS.map((r) => gateRowToY(r));
   const baseStats = spawnStatsFor({ typeId: "light", upgrades: defaultUpgrades(), tier: 1 });
-  for (let i = 0; i < DROP_UNIT_COUNT; i++) {
-    const y = lanes[i % lanes.length];
+  for (let i = 0; i < dropCount; i++) {
+    const gateY = gateYs[i % gateYs.length];
+    const yJitter = (Math.random() - 0.5) * 36;
+    const xJitter = (Math.random() - 0.5) * 40;
+    const y = gateY + yJitter;
     const stats = { ...baseStats };
     game.units.push({
       side,
       typeId: "light",
       kind: "unit",
-      x: baseX,
+      x: baseX + xJitter,
       y,
-      gateY: y,
+      gateY,
       hp: stats.hp,
       maxHp: stats.hp,
       stats,
